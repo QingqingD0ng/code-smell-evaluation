@@ -1,0 +1,47 @@
+{
+  "problem_3.py": {
+    "syntax-error": [
+      {
+        "line": 1,
+        "message": "Parsing failed: 'invalid syntax (problem_3, line 1)'",
+        "msg_id": "E0001"
+      }
+    ]
+  },
+  "problem_2.py": {
+    "syntax-error": [
+      {
+        "line": 1,
+        "message": "Parsing failed: 'invalid syntax (problem_2, line 1)'",
+        "msg_id": "E0001"
+      }
+    ]
+  },
+  "problem_1.py": {
+    "syntax-error": [
+      {
+        "line": 1,
+        "message": "Parsing failed: 'invalid syntax (problem_1, line 1)'",
+        "msg_id": "E0001"
+      }
+    ]
+  },
+  "problem_5.py": {
+    "syntax-error": [
+      {
+        "line": 1,
+        "message": "Parsing failed: 'invalid syntax (problem_5, line 1)'",
+        "msg_id": "E0001"
+      }
+    ]
+  },
+  "problem_4.py": {
+    "syntax-error": [
+      {
+        "line": 1,
+        "message": "Parsing failed: 'invalid syntax (problem_4, line 1)'",
+        "msg_id": "E0001"
+      }
+    ]
+  }
+}
