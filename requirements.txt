@@ -2,3 +2,6 @@ requests
 datasets
 pylint
 bandit
+transformers
+torch
+accelerate
