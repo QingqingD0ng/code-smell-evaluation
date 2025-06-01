@@ -203,13 +203,27 @@ def main():
     parser.add_argument(
         "--model",
         choices=["qwen", "phi-4", "llama"],
-        help="Model to use for generation (required when not in debug mode)",
+        help="Model(s) to use for generation (required when not in debug mode). Can specify multiple models separated by commas (e.g., 'qwen,phi-4')",
     )
     args = parser.parse_args()
 
     # Validate model argument
     if not args.debug and not args.model:
         parser.error("--model is required when not in debug mode")
+
+    # Define model mapping
+    MODEL_MAP = {
+        "qwen": ("qwen", "Qwen/Qwen2.5-Coder-32B-Instruct"),
+        "phi-4": ("phi-4", "microsoft/phi-4"),
+        "llama": ("llama", "meta-llama/Llama-3.3-70B-Instruct"),
+    }
+
+    # Process model selection
+    if args.debug:
+        MODEL_LIST = DEBUG_MODELS
+    else:
+        selected_models = [m.strip() for m in args.model.split(",")]
+        MODEL_LIST = [(model, MODEL_MAP[model][1]) for model in selected_models]
 
     # Set dataset name based on argument
     DATASET_NAME = (
@@ -218,7 +232,7 @@ def main():
         else None
     )
 
-    with open("/scratch/USER/hf_key.txt", "r") as file:
+    with open("/scratch/qido00001/hf_key.txt", "r") as file:
         key = file.readline()
     login(key)
 
@@ -229,14 +243,6 @@ def main():
     print(f"PyTorch version: {torch.__version__}")
     print(f"CUDA available: {torch.cuda.is_available()}")
     print(f"MPS available: {torch.backends.mps.is_available()}\n")
-
-    # Select model based on argument
-    MODEL_MAP = {
-        "qwen": ("qwen", "Qwen/Qwen2.5-Coder-32B-Instruct"),
-        "phi-4": ("phi-4", "microsoft/phi-4"),
-        "llama": ("llama", "meta-llama/Llama-3.3-70B-Instruct"),
-    }
-    MODEL_LIST = [MODEL_MAP[args.model]] if args.model else MODEL_MAP.values()
 
     # Load datasets based on argument
     datasets = []
