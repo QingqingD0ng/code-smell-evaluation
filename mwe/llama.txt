@@ -1,0 +1,9 @@
+#!/bin/bash
+#SBATCH --job-name=llama-3
+#SBATCH --output=logs/log_%j.out
+#SBATCH --exclusive
+#SBATCH --partition=anywhere
+#SBATCH --nodelist=aventinus
+#SBATCH --mem=58G
+
+srun llama.sh
