@@ -1,5 +1,5 @@
 import os
-import csv
+import json
 import re
 import argparse
 from generate_code import PRODUCTION_MODELS, DEBUG_MODELS, PROMPT_TEMPLATES
@@ -126,48 +126,48 @@ def save_code_to_file(code, model_path, dataset, technique, task_id):
         return False
 
 
-def process_csv(csv_path, output_base_path, models):
-    """Process the CSV file and extract code into organized folders."""
-    # Create all necessary folders
-    create_model_folders(output_base_path, models)
+def process_jsonl(jsonl_path, output_base_path):
+    """Process the JSONL file and extract code into organized folders."""
 
-    # Keep track of statistics
     stats = defaultdict(lambda: defaultdict(lambda: {"success": 0, "failed": 0}))
 
-    with open(csv_path, "r", encoding="utf-8") as csvfile:
-        reader = csv.DictReader(csvfile)
-
-        for row in reader:
+    with open(jsonl_path, "r", encoding="utf-8") as f:
+        for line in f:
+            row = json.loads(line)
             task_id = row["task_id"]
             dataset = row["dataset"]
-            print(f"\nProcessing task {task_id}")
+            model_name = row["model"]
+            print(f"\nProcessing task {task_id} from {dataset} for model {model_name}")
 
-            # Process each model's outputs
-            for model_name, _ in models:
-                model_path = os.path.join(output_base_path, model_name)
+            model_path = os.path.join(output_base_path, model_name)
 
-                # Process each prompting technique
-                for technique in PROMPT_TEMPLATES.keys():
-                    # Handle special cases for cot and rci techniques
-                    if technique in ["cot", "rci"]:
-                        column_name = (
-                            f"{model_name}_{technique}_final"
-                            if technique == "cot"
-                            else f"{model_name}_{technique}_improved"
-                        )
+            # Process each generation type
+            for gen_type, content in row["generations"].items():
+                if gen_type == "error":
+                    print(f"Error in task {task_id}: {content}")
+                    continue
+
+                if gen_type == "cot":
+                    # Handle CoT special case
+                    code = extract_python_code(content["final_code"])
+                    if save_code_to_file(code, model_path, dataset, "cot", task_id):
+                        stats[model_name]["cot"]["success"] += 1
                     else:
-                        column_name = f"{model_name}_{technique}"
-
-                    if column_name in row:
-                        print(f"Extracting code for {model_name}/{technique}")
-                        code = extract_python_code(row[column_name])
-
-                        if save_code_to_file(
-                            code, model_path, dataset, technique, task_id
-                        ):
-                            stats[model_name][technique]["success"] += 1
-                        else:
-                            stats[model_name][technique]["failed"] += 1
+                        stats[model_name]["cot"]["failed"] += 1
+                elif gen_type == "rci":
+                    # Handle RCI special case
+                    code = extract_python_code(content["improved_code"])
+                    if save_code_to_file(code, model_path, dataset, "rci", task_id):
+                        stats[model_name]["rci"]["success"] += 1
+                    else:
+                        stats[model_name]["rci"]["failed"] += 1
+                else:
+                    # Handle regular generation types
+                    code = extract_python_code(content)
+                    if save_code_to_file(code, model_path, dataset, gen_type, task_id):
+                        stats[model_name][gen_type]["success"] += 1
+                    else:
+                        stats[model_name][gen_type]["failed"] += 1
 
     # Print statistics
     print("\nExtraction Statistics:")
@@ -180,23 +180,26 @@ def process_csv(csv_path, output_base_path, models):
 
 
 def main():
-    # Add argument parser for debug mode
-    parser = argparse.ArgumentParser(description="Extract code from CSV file")
+    # Add argument parser
+    parser = argparse.ArgumentParser(description="Extract code from JSONL file")
     parser.add_argument(
-        "--debug", action="store_true", help="Run in debug mode with smaller models"
+        "--input",
+        required=True,
+        help="Input JSONL file containing the generated code",
+    )
+    parser.add_argument(
+        "--output",
+        default="extracted_code",
+        help="Output directory for extracted code (default: extracted_code)",
     )
     args = parser.parse_args()
 
     # Configure paths
-    csv_path = "debug_results.csv" if args.debug else "results.csv"
-    output_base_path = "extracted_code"
+    output_base_path = args.output
 
-    # Select models based on debug flag
-    models = DEBUG_MODELS if args.debug else PRODUCTION_MODELS
-
-    # Process the CSV file
-    print(f"Processing {csv_path}...")
-    process_csv(csv_path, output_base_path, models)
+    # Process the JSONL file
+    print(f"Processing {args.input}...")
+    process_jsonl(args.input, output_base_path)
     print("\nDone! Code has been extracted and organized into folders.")
     print(f"Output location: {os.path.abspath(output_base_path)}")
 

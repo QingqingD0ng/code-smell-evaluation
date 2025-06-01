@@ -184,7 +184,10 @@ def main():
         "--debug", action="store_true", help="Run in debug mode with smaller model"
     )
     parser.add_argument(
-        "--num_samples", type=int, default=3, help="Number of samples to generate"
+        "--num_samples",
+        type=int,
+        default=None,
+        help="Number of samples to generate (default: use full dataset)",
     )
     parser.add_argument(
         "--dataset",
@@ -192,7 +195,21 @@ def main():
         default="bigcodebench",
         help="Dataset to use (BigCodeBench, CoderEval, or both)",
     )
+    parser.add_argument(
+        "--output",
+        default="results.jsonl",
+        help="Output JSONL file name",
+    )
+    parser.add_argument(
+        "--model",
+        choices=["qwen", "phi-4", "llama"],
+        help="Model to use for generation (required when not in debug mode)",
+    )
     args = parser.parse_args()
+
+    # Validate model argument
+    if not args.debug and not args.model:
+        parser.error("--model is required when not in debug mode")
 
     # Set dataset name based on argument
     DATASET_NAME = (
@@ -213,8 +230,13 @@ def main():
     print(f"CUDA available: {torch.cuda.is_available()}")
     print(f"MPS available: {torch.backends.mps.is_available()}\n")
 
-    # Select model list based on debug flag
-    MODEL_LIST = DEBUG_MODELS if args.debug else PRODUCTION_MODELS
+    # Select model based on argument
+    MODEL_MAP = {
+        "qwen": ("qwen", "Qwen/Qwen2.5-Coder-32B-Instruct"),
+        "phi-4": ("phi-4", "microsoft/phi-4"),
+        "llama": ("llama", "meta-llama/Llama-3.3-70B-Instruct"),
+    }
+    MODEL_LIST = [MODEL_MAP[args.model]] if args.model else MODEL_MAP.values()
 
     # Load datasets based on argument
     datasets = []
@@ -226,30 +248,13 @@ def main():
         jsonl_dataset = load_jsonl_dataset("dataset/CEPythonHumanLabel.jsonl")
         datasets.append(("codereval", jsonl_dataset))
 
-    # Generate code for tasks and save results to CSV
-    output_csv = "debug_results.csv" if args.debug else "results.csv"
-
-    # Create fieldnames for CSV
-    fieldnames = ["dataset", "task_id", "original_prompt"]
-    for model_name, _ in MODEL_LIST:
-        fieldnames.extend(
-            [
-                f"{model_name}_baseline",
-                f"{model_name}_quality_focused",
-                f"{model_name}_persona",
-            ]
-        )
-        fieldnames.extend([f"{model_name}_cot_reasoning", f"{model_name}_cot_final"])
-        fieldnames.extend(
-            [
-                f"{model_name}_rci_initial",
-                f"{model_name}_rci_review",
-                f"{model_name}_rci_improved",
-            ]
-        )
-
-    # Initialize results dictionary to store all results
+    # Create or load existing results
     all_results = {}
+    if os.path.exists(args.output):
+        with open(args.output, "r", encoding="utf-8") as f:
+            for line in f:
+                result = json.loads(line)
+                all_results[result["task_id"]] = result
 
     # Process each model
     for model_display, model_internal in MODEL_LIST:
@@ -263,14 +268,29 @@ def main():
             for dataset_name, dataset in datasets:
                 # Handle different dataset types
                 if dataset_name == "bigcodebench":
-                    items = dataset.select(range(args.num_samples))
+                    items = (
+                        dataset.select(range(args.num_samples))
+                        if args.num_samples
+                        else dataset
+                    )
                 else:  # codereval dataset (list)
-                    items = dataset[: args.num_samples]
+                    items = dataset[: args.num_samples] if args.num_samples else dataset
+
+                print(f"\nProcessing {len(items)} tasks from {dataset_name}")
 
                 # Process each task
                 for item in items:
                     task_id = item.get("task_id")
                     original_prompt = item.get("complete_prompt")
+
+                    # Skip if task is already completed
+                    if (
+                        task_id in all_results
+                        and "generations" in all_results[task_id]
+                        and all_results[task_id]["generations"]
+                    ):
+                        print(f"Skipping completed task {task_id}")
+                        continue
 
                     # Initialize result dictionary for this task if not exists
                     if task_id not in all_results:
@@ -278,7 +298,13 @@ def main():
                             "dataset": dataset_name,
                             "task_id": task_id,
                             "original_prompt": original_prompt,
+                            "model": model_display,
+                            "generations": {},
                         }
+                        # Write initial task entry
+                        with open(args.output, "a", encoding="utf-8") as f:
+                            f.write(json.dumps(all_results[task_id]) + "\n")
+                            f.flush()
 
                     print(f"\nProcessing task {task_id} from {dataset_name}")
 
@@ -288,10 +314,13 @@ def main():
                         baseline_code = generator.generate_response(
                             PROMPT_TEMPLATES["baseline"].format(task=original_prompt)
                         )
-                        all_results[task_id][
-                            f"{model_display}_baseline"
-                        ] = baseline_code
+                        all_results[task_id]["generations"]["baseline"] = baseline_code
                         generator.reset_history()
+                        # Write after baseline
+                        with open(args.output, "w", encoding="utf-8") as f:
+                            for tid, result in all_results.items():
+                                f.write(json.dumps(result) + "\n")
+                            f.flush()
 
                         print("Generating quality-focused solution...")
                         quality_code = generator.generate_response(
@@ -299,52 +328,69 @@ def main():
                                 task=original_prompt
                             )
                         )
-                        all_results[task_id][
-                            f"{model_display}_quality_focused"
+                        all_results[task_id]["generations"][
+                            "quality_focused"
                         ] = quality_code
                         generator.reset_history()
+                        # Write after quality-focused
+                        with open(args.output, "w", encoding="utf-8") as f:
+                            for tid, result in all_results.items():
+                                f.write(json.dumps(result) + "\n")
+                            f.flush()
 
                         print("Generating persona solution...")
                         persona_code = generator.generate_response(
                             PROMPT_TEMPLATES["persona"].format(task=original_prompt)
                         )
-                        all_results[task_id][f"{model_display}_persona"] = persona_code
+                        all_results[task_id]["generations"]["persona"] = persona_code
                         generator.reset_history()
+                        # Write after persona
+                        with open(args.output, "w", encoding="utf-8") as f:
+                            for tid, result in all_results.items():
+                                f.write(json.dumps(result) + "\n")
+                            f.flush()
 
                         # Handle CoT
                         print("Generating CoT solution...")
                         cot_result = generate_cot_solution(
                             original_prompt, model_internal, generator
                         )
-                        all_results[task_id][f"{model_display}_cot_reasoning"] = (
-                            cot_result["reasoning"]
-                        )
-                        all_results[task_id][f"{model_display}_cot_final"] = cot_result[
-                            "final_code"
-                        ]
+                        all_results[task_id]["generations"]["cot"] = {
+                            "reasoning": cot_result["reasoning"],
+                            "final_code": cot_result["final_code"],
+                        }
                         generator.reset_history()
+                        # Write after CoT
+                        with open(args.output, "w", encoding="utf-8") as f:
+                            for tid, result in all_results.items():
+                                f.write(json.dumps(result) + "\n")
+                            f.flush()
 
                         # Handle RCI
                         print("Generating RCI solution...")
                         rci_result = generate_rci_solution(
                             original_prompt, model_internal, generator
                         )
-                        all_results[task_id][f"{model_display}_rci_initial"] = (
-                            rci_result["initial_code"]
-                        )
-                        all_results[task_id][f"{model_display}_rci_review"] = (
-                            rci_result["review"]
-                        )
-                        all_results[task_id][f"{model_display}_rci_improved"] = (
-                            rci_result["improved_code"]
-                        )
+                        all_results[task_id]["generations"]["rci"] = {
+                            "initial_code": rci_result["initial_code"],
+                            "review": rci_result["review"],
+                            "improved_code": rci_result["improved_code"],
+                        }
+                        generator.reset_history()
+                        # Write after RCI
+                        with open(args.output, "w", encoding="utf-8") as f:
+                            for tid, result in all_results.items():
+                                f.write(json.dumps(result) + "\n")
+                            f.flush()
 
                     except Exception as e:
                         print(f"Error processing task {task_id}: {str(e)}")
-                        # Set all fields for this model to error message
-                        for field in fieldnames:
-                            if field.startswith(model_display):
-                                all_results[task_id][field] = f"Error: {str(e)}"
+                        all_results[task_id]["generations"] = {"error": str(e)}
+                        # Write error state
+                        with open(args.output, "w", encoding="utf-8") as f:
+                            for tid, result in all_results.items():
+                                f.write(json.dumps(result) + "\n")
+                            f.flush()
 
         finally:
             # Clean up resources after processing all tasks for this model
@@ -352,15 +398,7 @@ def main():
             generator.cleanup()
             del generator
 
-    # Write all results to CSV
-    with open(output_csv, "w", newline="", encoding="utf-8") as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-        for task_id, result in all_results.items():
-            writer.writerow(result)
-            csvfile.flush()  # Ensure data is written to disk after each row
-
-    print(f"Done. All results saved in {output_csv}")
+    print(f"Done. All results saved in {args.output}")
 
 
 if __name__ == "__main__":
