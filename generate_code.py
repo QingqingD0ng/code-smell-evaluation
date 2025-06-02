@@ -9,11 +9,6 @@ import platform
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import transformers
 
-# Set up cache location for cluster
-cache_location = "/scratch/USER/tuning/.cache"
-os.environ["HF_HOME"] = cache_location
-os.environ["SENTENCE_TRANSFORMERS_HOME"] = cache_location
-
 # Define the models to use
 PRODUCTION_MODELS = [
     ("qwen", "Qwen/Qwen2.5-Coder-32B-Instruct"),
@@ -236,7 +231,7 @@ def main():
     )
 
     with open("/scratch/qido00001/hf_key.txt", "r") as file:
-        key = file.readline()
+        key = file.read().strip()
     login(key)
 
     # Print system information
