@@ -290,13 +290,15 @@ def main():
                     task_id = item.get("task_id")
                     original_prompt = item.get("complete_prompt")
 
-                    # Skip if task is already completed
+                    # Skip if task is already completed for this model
                     if (
                         task_id in all_results
-                        and "generations" in all_results[task_id]
-                        and all_results[task_id]["generations"]
+                        and model_display in all_results[task_id]["generations"]
+                        and all_results[task_id]["generations"][model_display]
                     ):
-                        print(f"Skipping completed task {task_id}")
+                        print(
+                            f"Skipping completed task {task_id} for model {model_display}"
+                        )
                         continue
 
                     # Initialize result dictionary for this task if not exists
@@ -305,7 +307,6 @@ def main():
                             "dataset": dataset_name,
                             "task_id": task_id,
                             "original_prompt": original_prompt,
-                            "model": model_display,
                             "generations": {},
                         }
                         # Write initial task entry
@@ -313,7 +314,13 @@ def main():
                             f.write(json.dumps(all_results[task_id]) + "\n")
                             f.flush()
 
-                    print(f"\nProcessing task {task_id} from {dataset_name}")
+                    # Initialize model's generations if not exists
+                    if model_display not in all_results[task_id]["generations"]:
+                        all_results[task_id]["generations"][model_display] = {}
+
+                    print(
+                        f"\nProcessing task {task_id} from {dataset_name} for model {model_display}"
+                    )
 
                     try:
                         # Handle regular templates
@@ -321,7 +328,9 @@ def main():
                         baseline_code = generator.generate_response(
                             PROMPT_TEMPLATES["baseline"].format(task=original_prompt)
                         )
-                        all_results[task_id]["generations"]["baseline"] = baseline_code
+                        all_results[task_id]["generations"][model_display][
+                            "baseline"
+                        ] = baseline_code
                         generator.reset_history()
                         # Write after baseline
                         with open(args.output, "w", encoding="utf-8") as f:
@@ -335,7 +344,7 @@ def main():
                                 task=original_prompt
                             )
                         )
-                        all_results[task_id]["generations"][
+                        all_results[task_id]["generations"][model_display][
                             "quality_focused"
                         ] = quality_code
                         generator.reset_history()
@@ -349,7 +358,9 @@ def main():
                         persona_code = generator.generate_response(
                             PROMPT_TEMPLATES["persona"].format(task=original_prompt)
                         )
-                        all_results[task_id]["generations"]["persona"] = persona_code
+                        all_results[task_id]["generations"][model_display][
+                            "persona"
+                        ] = persona_code
                         generator.reset_history()
                         # Write after persona
                         with open(args.output, "w", encoding="utf-8") as f:
@@ -360,7 +371,7 @@ def main():
                         # Handle CoT
                         print("Generating CoT solution...")
                         cot_result = generate_cot_solution(original_prompt, generator)
-                        all_results[task_id]["generations"]["cot"] = {
+                        all_results[task_id]["generations"][model_display]["cot"] = {
                             "reasoning": cot_result["reasoning"],
                             "final_code": cot_result["final_code"],
                         }
@@ -374,7 +385,7 @@ def main():
                         # Handle RCI
                         print("Generating RCI solution...")
                         rci_result = generate_rci_solution(original_prompt, generator)
-                        all_results[task_id]["generations"]["rci"] = {
+                        all_results[task_id]["generations"][model_display]["rci"] = {
                             "initial_code": rci_result["initial_code"],
                             "review": rci_result["review"],
                             "improved_code": rci_result["improved_code"],
@@ -387,8 +398,12 @@ def main():
                             f.flush()
 
                     except Exception as e:
-                        print(f"Error processing task {task_id}: {str(e)}")
-                        all_results[task_id]["generations"] = {"error": str(e)}
+                        print(
+                            f"Error processing task {task_id} for model {model_display}: {str(e)}"
+                        )
+                        all_results[task_id]["generations"][model_display] = {
+                            "error": str(e)
+                        }
                         # Write error state
                         with open(args.output, "w", encoding="utf-8") as f:
                             for tid, result in all_results.items():

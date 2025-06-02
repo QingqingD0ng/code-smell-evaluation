@@ -136,38 +136,44 @@ def process_jsonl(jsonl_path, output_base_path):
             row = json.loads(line)
             task_id = row["task_id"]
             dataset = row["dataset"]
-            model_name = row["model"]
-            print(f"\nProcessing task {task_id} from {dataset} for model {model_name}")
+            print(f"\nProcessing task {task_id} from {dataset}")
 
-            model_path = os.path.join(output_base_path, model_name)
+            # Process each model's generations
+            for model_name, model_generations in row["generations"].items():
+                print(f"Processing generations for model {model_name}")
+                model_path = os.path.join(output_base_path, model_name)
 
-            # Process each generation type
-            for gen_type, content in row["generations"].items():
-                if gen_type == "error":
-                    print(f"Error in task {task_id}: {content}")
-                    continue
+                # Process each generation type
+                for gen_type, content in model_generations.items():
+                    if gen_type == "error":
+                        print(
+                            f"Error in task {task_id} for model {model_name}: {content}"
+                        )
+                        continue
 
-                if gen_type == "cot":
-                    # Handle CoT special case
-                    code = extract_python_code(content["final_code"])
-                    if save_code_to_file(code, model_path, dataset, "cot", task_id):
-                        stats[model_name]["cot"]["success"] += 1
+                    if gen_type == "cot":
+                        # Handle CoT special case
+                        code = extract_python_code(content["final_code"])
+                        if save_code_to_file(code, model_path, dataset, "cot", task_id):
+                            stats[model_name]["cot"]["success"] += 1
+                        else:
+                            stats[model_name]["cot"]["failed"] += 1
+                    elif gen_type == "rci":
+                        # Handle RCI special case
+                        code = extract_python_code(content["improved_code"])
+                        if save_code_to_file(code, model_path, dataset, "rci", task_id):
+                            stats[model_name]["rci"]["success"] += 1
+                        else:
+                            stats[model_name]["rci"]["failed"] += 1
                     else:
-                        stats[model_name]["cot"]["failed"] += 1
-                elif gen_type == "rci":
-                    # Handle RCI special case
-                    code = extract_python_code(content["improved_code"])
-                    if save_code_to_file(code, model_path, dataset, "rci", task_id):
-                        stats[model_name]["rci"]["success"] += 1
-                    else:
-                        stats[model_name]["rci"]["failed"] += 1
-                else:
-                    # Handle regular generation types
-                    code = extract_python_code(content)
-                    if save_code_to_file(code, model_path, dataset, gen_type, task_id):
-                        stats[model_name][gen_type]["success"] += 1
-                    else:
-                        stats[model_name][gen_type]["failed"] += 1
+                        # Handle regular generation types
+                        code = extract_python_code(content)
+                        if save_code_to_file(
+                            code, model_path, dataset, gen_type, task_id
+                        ):
+                            stats[model_name][gen_type]["success"] += 1
+                        else:
+                            stats[model_name][gen_type]["failed"] += 1
 
     # Print statistics
     print("\nExtraction Statistics:")
