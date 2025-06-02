@@ -202,7 +202,7 @@ def main():
     )
     parser.add_argument(
         "--model",
-        choices=["qwen", "phi-4", "llama"],
+        choices=["qwen", "phi-4", "llama", "all"],
         help="Model(s) to use for generation (required when not in debug mode). Can specify multiple models separated by commas (e.g., 'qwen,phi-4')",
     )
     args = parser.parse_args()
@@ -222,7 +222,10 @@ def main():
     if args.debug:
         MODEL_LIST = DEBUG_MODELS
     else:
-        selected_models = [m.strip() for m in args.model.split(",")]
+        if args.model == "all":
+            selected_models = list(MODEL_MAP.keys())
+        else:
+            selected_models = [args.model.strip()]
         MODEL_LIST = [(model, MODEL_MAP[model][1]) for model in selected_models]
 
     # Set dataset name based on argument

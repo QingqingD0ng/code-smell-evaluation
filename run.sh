@@ -2,6 +2,7 @@
 set -e  # Exit immediately if a command exits with a non-zero status
 
 # Activate the Python environment
+source /scratch/qido00001/.bashrc
 pyenv activate env
 
 # Set cache directories
