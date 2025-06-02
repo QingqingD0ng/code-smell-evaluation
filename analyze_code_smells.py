@@ -13,6 +13,11 @@ from generate_code import (
     PROMPT_TEMPLATES,
 )
 import argparse
+import pandas as pd
+import numpy as np
+from scipy import stats
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 # Set up logging
 logging.basicConfig(
@@ -617,27 +622,6 @@ def generate_security_statistics_table(results):
     ]
     print("|" + "|".join(f" {v:^30} " for v in total_row))
 
-    # Print detailed security smell types
-    print("\nDetailed Security Smell Types:")
-    print("-" * 70)
-
-    # Collect all security smell types and their counts
-    security_types = defaultdict(int)
-    for result in results.values():
-        if result["bandit"] and "results" in result["bandit"]:
-            for item in result["bandit"]["results"]:
-                security_types[item["test_id"]] += 1
-
-    # Print top security smells
-    print("\nTop Security Smells:")
-    print("|".join(f" {h:^30} " for h in ["Security Smell ID", "Count"]))
-    print("|" + "|".join("-" * 32 for _ in range(2)) + "|")
-
-    for smell_id, count in sorted(
-        security_types.items(), key=lambda x: x[1], reverse=True
-    ):
-        print("|" + "|".join(f" {v:^30} " for v in [smell_id, str(count)]))
-
 
 def generate_top_security_smells_table(results):
     """Generate a table of top 3 security smells detected by Bandit for each dataset"""
@@ -1009,6 +993,244 @@ def generate_comprehensive_security_table(results):
     print("|" + "|".join(f" {v:^30} " for v in total_row))
 
 
+def perform_kruskal_wallis_test(results):
+    """Perform Kruskal-Wallis test for different prompt techniques"""
+    print("\n=== Kruskal-Wallis Test Results ===")
+
+    # Convert results to DataFrame format
+    data = []
+    for model_name, model_results in results.items():
+        for key, result in model_results.items():
+            dataset, technique = key.split("/")
+            # Count total smells for each file
+            for task_id, issues in result["pylint"].items():
+                total_smells = len(issues["fatal_errors"]) + len(issues["other_issues"])
+                data.append(
+                    {
+                        "model": model_name,
+                        "dataset": dataset,
+                        "technique": technique,
+                        "task_id": task_id,
+                        "total_smells": total_smells,
+                    }
+                )
+
+    df = pd.DataFrame(data)
+
+    # Perform test for each model and dataset combination
+    test_results = []
+    for (model, dataset), group in df.groupby(["model", "dataset"]):
+        # Prepare data for Kruskal-Wallis test
+        techniques = group["technique"].unique()
+        samples = [
+            group[group["technique"] == tech]["total_smells"] for tech in techniques
+        ]
+
+        # Perform Kruskal-Wallis test
+        h_stat, p_value = stats.kruskal(*samples)
+
+        test_results.append(
+            {
+                "model": model,
+                "dataset": dataset,
+                "h_statistic": h_stat,
+                "p_value": p_value,
+                "significant": p_value < 0.05,
+            }
+        )
+
+    # Print results in a table format
+    print("\nModel\tDataset\tH-statistic\tp-value\tSignificant")
+    print("-" * 70)
+    for result in test_results:
+        print(
+            f"{result['model']}\t{result['dataset']}\t{result['h_statistic']:.2f}\t{result['p_value']:.4f}\t{result['significant']}"
+        )
+
+    return test_results
+
+
+def perform_security_kruskal_wallis_test(results):
+    """Perform Kruskal-Wallis test for security smells across different prompt techniques"""
+    print("\n=== Security Smells Kruskal-Wallis Test Results ===")
+
+    # Convert results to DataFrame format
+    data = []
+    for model_name, model_results in results.items():
+        for key, result in model_results.items():
+            dataset, technique = key.split("/")
+            # Count security smells for each file
+            if result["bandit"] and "results" in result["bandit"]:
+                # Group security smells by filename
+                security_smells_by_file = defaultdict(int)
+                for item in result["bandit"]["results"]:
+                    security_smells_by_file[item["filename"]] += 1
+
+                # Add to data
+                for filename, count in security_smells_by_file.items():
+                    data.append(
+                        {
+                            "model": model_name,
+                            "dataset": dataset,
+                            "technique": technique,
+                            "file": filename,
+                            "security_smells": count,
+                        }
+                    )
+
+    if not data:
+        print("No security smells found in the results")
+        return []
+
+    df = pd.DataFrame(data)
+
+    # Perform test for each model and dataset combination
+    test_results = []
+    for (model, dataset), group in df.groupby(["model", "dataset"]):
+        # Prepare data for Kruskal-Wallis test
+        techniques = group["technique"].unique()
+        samples = [
+            group[group["technique"] == tech]["security_smells"] for tech in techniques
+        ]
+
+        # Perform Kruskal-Wallis test
+        h_stat, p_value = stats.kruskal(*samples)
+
+        test_results.append(
+            {
+                "model": model,
+                "dataset": dataset,
+                "h_statistic": h_stat,
+                "p_value": p_value,
+                "significant": p_value < 0.05,
+            }
+        )
+
+    # Print results in a table format
+    print("\nModel\tDataset\tH-statistic\tp-value\tSignificant")
+    print("-" * 70)
+    for result in test_results:
+        print(
+            f"{result['model']}\t{result['dataset']}\t{result['h_statistic']:.2f}\t{result['p_value']:.4f}\t{result['significant']}"
+        )
+
+    return test_results
+
+
+def create_smell_visualizations(results, output_dir):
+    """Create visualizations of code smell distributions"""
+    print("\nCreating visualizations...")
+
+    # Convert results to DataFrame format
+    data = []
+    for model_name, model_results in results.items():
+        for key, result in model_results.items():
+            dataset, technique = key.split("/")
+            # Count total smells for each file
+            for task_id, issues in result["pylint"].items():
+                total_smells = len(issues["fatal_errors"]) + len(issues["other_issues"])
+                data.append(
+                    {
+                        "model": model_name,
+                        "dataset": dataset,
+                        "technique": technique,
+                        "task_id": task_id,
+                        "total_smells": total_smells,
+                    }
+                )
+
+    df = pd.DataFrame(data)
+
+    # Set style
+    plt.style.use("seaborn")
+
+    # Create box plots for each model and dataset combination
+    for (model, dataset), group in df.groupby(["model", "dataset"]):
+        plt.figure(figsize=(12, 6))
+        sns.boxplot(data=group, x="technique", y="total_smells")
+        plt.title(f"Code Smells Distribution - {model} on {dataset}")
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, f"boxplot_{model}_{dataset}.png"))
+        plt.close()
+
+    # Create heatmap of mean smells
+    pivot_df = df.pivot_table(
+        values="total_smells",
+        index=["model", "dataset"],
+        columns="technique",
+        aggfunc="mean",
+    )
+    plt.figure(figsize=(12, 8))
+    sns.heatmap(pivot_df, annot=True, cmap="YlOrRd", fmt=".2f")
+    plt.title("Mean Code Smells by Model, Dataset, and Technique")
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, "heatmap.png"))
+    plt.close()
+
+
+def create_security_visualizations(results, output_dir):
+    """Create visualizations of security smell distributions"""
+    print("\nCreating security smell visualizations...")
+
+    # Convert results to DataFrame format
+    data = []
+    for model_name, model_results in results.items():
+        for key, result in model_results.items():
+            dataset, technique = key.split("/")
+            # Count security smells for each file
+            if result["bandit"] and "results" in result["bandit"]:
+                # Group security smells by filename
+                security_smells_by_file = defaultdict(int)
+                for item in result["bandit"]["results"]:
+                    security_smells_by_file[item["filename"]] += 1
+
+                # Add to data
+                for filename, count in security_smells_by_file.items():
+                    data.append(
+                        {
+                            "model": model_name,
+                            "dataset": dataset,
+                            "technique": technique,
+                            "file": filename,
+                            "security_smells": count,
+                        }
+                    )
+
+    if not data:
+        print("No security smells found for visualization")
+        return
+
+    df = pd.DataFrame(data)
+
+    # Set style
+    plt.style.use("seaborn")
+
+    # Create box plots for each model and dataset combination
+    for (model, dataset), group in df.groupby(["model", "dataset"]):
+        plt.figure(figsize=(12, 6))
+        sns.boxplot(data=group, x="technique", y="security_smells")
+        plt.title(f"Security Smells Distribution - {model} on {dataset}")
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, f"security_boxplot_{model}_{dataset}.png"))
+        plt.close()
+
+    # Create heatmap of mean security smells
+    pivot_df = df.pivot_table(
+        values="security_smells",
+        index=["model", "dataset"],
+        columns="technique",
+        aggfunc="mean",
+    )
+    plt.figure(figsize=(12, 8))
+    sns.heatmap(pivot_df, annot=True, cmap="YlOrRd", fmt=".2f")
+    plt.title("Mean Security Smells by Model, Dataset, and Technique")
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, "security_heatmap.png"))
+    plt.close()
+
+
 def main():
     # Add argument parser for debug mode
     parser = argparse.ArgumentParser(description="Analyze code smells")
@@ -1181,6 +1403,30 @@ Analysis files:
         ) as f:
             f.write(comprehensive_security_output)
 
+        # Perform Kruskal-Wallis test for code smells
+        kruskal_output = get_function_output(perform_kruskal_wallis_test, results)
+        with open(
+            os.path.join(analysis_dir, "kruskal_wallis.txt"),
+            "w",
+            encoding="utf-8",
+        ) as f:
+            f.write(kruskal_output)
+
+        # Perform Kruskal-Wallis test for security smells
+        security_kruskal_output = get_function_output(
+            perform_security_kruskal_wallis_test, results
+        )
+        with open(
+            os.path.join(analysis_dir, "security_kruskal_wallis.txt"),
+            "w",
+            encoding="utf-8",
+        ) as f:
+            f.write(security_kruskal_output)
+
+        # Create visualizations
+        create_smell_visualizations(results, analysis_dir)
+        create_security_visualizations(results, analysis_dir)
+
         # Create overall summary
         overall_summary = f"""Code Smell Analysis Summary
 {'=' * 50}
@@ -1205,6 +1451,12 @@ Each model directory contains:
 Overall analysis:
 - comprehensive.txt
 - comprehensive_security.txt
+- kruskal_wallis.txt
+- security_kruskal_wallis.txt
+- boxplot_*.png
+- security_boxplot_*.png
+- heatmap.png
+- security_heatmap.png
 """
         with open(
             os.path.join(analysis_dir, "overall_summary.txt"), "w", encoding="utf-8"

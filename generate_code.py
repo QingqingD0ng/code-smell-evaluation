@@ -16,7 +16,10 @@ PRODUCTION_MODELS = [
     ("llama", "meta-llama/Llama-3.3-70B-Instruct"),
 ]
 
-DEBUG_MODELS = [("qwen3", "Qwen/Qwen3-0.6B"), ("qwen2.5", "Qwen/Qwen2.5-0.5B-Instruct")]
+DEBUG_MODELS = [
+    ("qwen3", "Qwen/Qwen2.5-0.5B-Instruct"),
+    ("qwen2.5", "Qwen/Qwen2.5-Coder-0.5B-Instruct"),
+]
 
 # Define prompt templates
 PROMPT_TEMPLATES = {
@@ -54,15 +57,7 @@ class CodeGenerator:
         print(f"Using device: {self.device}")
 
         # Use pipeline approach for phi-4 and llama models
-        if "phi-4" in model_name or "llama" in model_name:
-            self.model = transformers.pipeline(
-                "text-generation",
-                model=model_name,
-                model_kwargs={"torch_dtype": "auto"},
-                device_map="auto",
-            )
-            self.is_pipeline = True
-        else:
+        if "qwen" in model_name:
             self.tokenizer = AutoTokenizer.from_pretrained(
                 model_name, trust_remote_code=True
             )
@@ -70,6 +65,14 @@ class CodeGenerator:
                 model_name, device_map=self.device, trust_remote_code=True
             ).eval()
             self.is_pipeline = False
+        else:
+            self.model = transformers.pipeline(
+                "text-generation",
+                model=model_name,
+                model_kwargs={"torch_dtype": "auto"},
+                device_map="auto",
+            )
+            self.is_pipeline = True
         self.history = []
 
     def cleanup(self):
@@ -98,7 +101,7 @@ class CodeGenerator:
             outputs = self.model(messages, max_new_tokens=max_new_tokens)
             response = outputs[0]["generated_text"][-1]["content"]
         else:
-            # Original approach for other models
+            # For qwen models
             messages = self.history + [{"role": "user", "content": prompt}]
             text = self.tokenizer.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=True
@@ -124,7 +127,7 @@ class CodeGenerator:
         self.history = []
 
 
-def generate_cot_solution(task, model_id, generator):
+def generate_cot_solution(task, generator):
     """Generate solution using Chain of Thought prompting"""
     # Step 1: Generate reasoning
     initial_prompt = PROMPT_TEMPLATES["cot"]["initial"].format(task=task)
@@ -137,7 +140,7 @@ def generate_cot_solution(task, model_id, generator):
     return {"reasoning": reasoning, "final_code": final_code}
 
 
-def generate_rci_solution(task, model_id, generator):
+def generate_rci_solution(task, generator):
     """Generate solution using Review-Critique-Improve process"""
     # Step 1: Initial code generation
     initial_prompt = PROMPT_TEMPLATES["rci"]["initial"].format(task=task)
@@ -198,7 +201,7 @@ def main():
     parser.add_argument(
         "--model",
         choices=["qwen", "phi-4", "llama", "all"],
-        help="Model(s) to use for generation (required when not in debug mode). Can specify multiple models separated by commas (e.g., 'qwen,phi-4')",
+        help="Model(s) to use for generation (required when not in debug mode).",
     )
     args = parser.parse_args()
 
@@ -229,10 +232,10 @@ def main():
         if args.dataset in ["bigcodebench", "both"]
         else None
     )
-
-    with open("/scratch/qido00001/hf_key.txt", "r") as file:
-        key = file.read().strip()
-    login(key)
+    if not args.debug:
+        with open("/scratch/qido00001/hf_key.txt", "r") as file:
+            key = file.read().strip()
+        login(key)
 
     # Print system information
     print("\nSystem Information:")
@@ -356,9 +359,7 @@ def main():
 
                         # Handle CoT
                         print("Generating CoT solution...")
-                        cot_result = generate_cot_solution(
-                            original_prompt, model_internal, generator
-                        )
+                        cot_result = generate_cot_solution(original_prompt, generator)
                         all_results[task_id]["generations"]["cot"] = {
                             "reasoning": cot_result["reasoning"],
                             "final_code": cot_result["final_code"],
@@ -372,9 +373,7 @@ def main():
 
                         # Handle RCI
                         print("Generating RCI solution...")
-                        rci_result = generate_rci_solution(
-                            original_prompt, model_internal, generator
-                        )
+                        rci_result = generate_rci_solution(original_prompt, generator)
                         all_results[task_id]["generations"]["rci"] = {
                             "initial_code": rci_result["initial_code"],
                             "review": rci_result["review"],

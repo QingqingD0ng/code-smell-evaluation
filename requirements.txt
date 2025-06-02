@@ -5,3 +5,8 @@ bandit
 transformers
 torch
 accelerate
+pandas
+numpy
+scipy
+matplotlib
+seaborn
