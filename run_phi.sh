@@ -17,6 +17,6 @@ mkdir -p "$TRANSFORMERS_CACHE"
 mkdir -p "$HF_HOME"
 
 echo "Starting code generation with selected models..."
-python generate_code.py --dataset both --model phi-4
+python generate_code.py --dataset both --model phi-4 --output phi.jsonl
 
 echo "Phi-4 model completed!"

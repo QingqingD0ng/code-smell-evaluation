@@ -17,6 +17,6 @@ mkdir -p "$TRANSFORMERS_CACHE"
 mkdir -p "$HF_HOME"
 
 echo "Starting code generation with selected models..."
-python generate_code.py --dataset both --model llama
+python generate_code.py --dataset both --model llama --output llama.jsonl
 
 echo "Llama3 model completed!"
