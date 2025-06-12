@@ -11,6 +11,7 @@ from transformers.pipelines.pt_utils import KeyDataset
 import logging
 import time
 from datetime import datetime
+import traceback
 
 logging.basicConfig(
     level=logging.INFO,
@@ -104,7 +105,7 @@ def load_jsonl_dataset(file_path):
     return tasks
 
 
-def process_technique_batch(generator, tasks, technique, logging):
+def process_technique_batch(generator, tasks, technique):
     """Process all tasks with a specific technique using Dataset for batching"""
     logging.info(f"Starting {technique} processing for {len(tasks)} tasks")
     start_time = time.time()
@@ -176,6 +177,13 @@ def main():
         "--model",
         type=str,
         help="Model to use (qwen, phi-4, llama, or all)",
+        required=False,
+    )
+    parser.add_argument(
+        "--num_samples",
+        type=int,
+        help="Number of samples to generate",
+        default=None,
         required=False,
     )
     parser.add_argument(
@@ -478,6 +486,10 @@ def main():
                                 f.write(json.dumps(result) + "\n")
                             f.flush()
 
+        except Exception as e:
+            logging.error(f"Error processing model {model_display}: {str(e)}")
+            logging.error(f"Error details: {traceback.format_exc()}")
+            raise
         finally:
             # Clean up resources after processing all tasks for this model
             logging.info(f"\nCleaning up resources for model: {model_display}")
