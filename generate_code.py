@@ -8,7 +8,16 @@ import platform
 import transformers
 from tqdm.auto import tqdm
 from transformers.pipelines.pt_utils import KeyDataset
-import datasets
+import logging
+import time
+from datetime import datetime
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[logging.FileHandler("code_generation.log"), logging.StreamHandler()],
+)
+
 
 # Define the models to use
 PRODUCTION_MODELS = {
@@ -55,7 +64,7 @@ class CodeGenerator:
     def __init__(self, model_name):
         self.device = get_device()
         self.model_name = model_name
-        print(f"Using device: {self.device}")
+        logging.info(f"Using device: {self.device}")
 
         # Use pipeline for all models
         self.model = transformers.pipeline(
@@ -80,7 +89,7 @@ class CodeGenerator:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-        print(f"Cleaned up resources for model: {self.model_name}")
+        logging.info(f"Cleaned up resources for model: {self.model_name}")
 
 
 def load_jsonl_dataset(file_path):
@@ -95,8 +104,11 @@ def load_jsonl_dataset(file_path):
     return tasks
 
 
-def process_technique_batch(generator, tasks, technique):
+def process_technique_batch(generator, tasks, technique, logging):
     """Process all tasks with a specific technique using Dataset for batching"""
+    logging.info(f"Starting {technique} processing for {len(tasks)} tasks")
+    start_time = time.time()
+
     # Convert tasks to Dataset
     task_dataset = Dataset.from_dict(
         {
@@ -106,6 +118,7 @@ def process_technique_batch(generator, tasks, technique):
     )
 
     if technique not in PROMPT_TEMPLATES:
+        logging.error(f"Unknown technique: {technique}")
         raise ValueError(f"Unknown technique: {technique}")
 
     # Create dataset with formatted prompts
@@ -124,63 +137,77 @@ def process_technique_batch(generator, tasks, technique):
     )
 
     # Generate responses
-    responses = list(
-        tqdm(
-            generator.model(KeyDataset(prompt_dataset, "messages")),
-            desc=f"Processing {technique}",
-            total=len(prompt_dataset),
+    try:
+        responses = list(
+            tqdm(
+                generator.model(KeyDataset(prompt_dataset, "messages")),
+                desc=f"Processing {technique}",
+                total=len(prompt_dataset),
+            )
         )
-    )
+        logging.info(
+            f"Successfully generated {len(responses)} responses for {technique}"
+        )
+    except Exception as e:
+        logging.error(f"Error generating responses for {technique}: {str(e)}")
+        raise
 
     # Return formatted results
-    return [resp[0]["generated_text"][-1]["content"] for resp in responses]
+    results = [resp[0]["generated_text"][-1]["content"] for resp in responses]
+    end_time = time.time()
+    logging.info(
+        f"Completed {technique} processing in {end_time - start_time:.2f} seconds"
+    )
+    return results
 
 
 def main():
+    # Set up logging
+    logging = setup_logging()
+    logging.info("Starting code generation process")
+
     # Add argument parser for debug mode
-    parser = argparse.ArgumentParser(
-        description="Generate code using different prompting strategies"
-    )
+    parser = argparse.ArgumentParser(description="Generate code using various models")
     parser.add_argument(
-        "--debug", action="store_true", help="Run in debug mode with smaller model"
-    )
-    parser.add_argument(
-        "--num_samples",
-        type=int,
-        default=None,
-        help="Number of samples to generate (default: use full dataset)",
-    )
-    parser.add_argument(
-        "--dataset",
-        choices=["bigcodebench", "codereval", "both"],
-        default="bigcodebench",
-        help="Dataset to use (BigCodeBench, CoderEval, or both)",
-    )
-    parser.add_argument(
-        "--output",
-        default="results.jsonl",
-        help="Output JSONL file name",
+        "--debug",
+        action="store_true",
+        help="Use debug models instead of production models",
     )
     parser.add_argument(
         "--model",
-        choices=["qwen", "phi-4", "llama", "all"],
-        help="Model(s) to use for generation (required when not in debug mode).",
+        type=str,
+        help="Model to use (qwen, phi-4, llama, or all)",
+        required=False,
+    )
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default="both",
+        help="Dataset to use (codereval, bigcodebench, or both)",
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default="results.jsonl",
+        help="Output file path",
     )
     args = parser.parse_args()
 
-    # Validate model argument
+    # Validate arguments
     if not args.debug and not args.model:
         parser.error("--model is required when not in debug mode")
 
     # Process model selection
     if args.debug:
         MODEL_LIST = DEBUG_MODELS
+        logging.info("Using debug models")
     else:
         if args.model == "all":
             selected_models = list(PRODUCTION_MODELS.keys())
         else:
             selected_models = [args.model.strip()]
         MODEL_LIST = [(model, PRODUCTION_MODELS[model]) for model in selected_models]
+        logging.info(f"Using production models: {selected_models}")
 
     # Set dataset name based on argument
     DATASET_NAME = (
@@ -194,12 +221,12 @@ def main():
         login(key)
 
     # Print system information
-    print("\nSystem Information:")
-    print(f"Platform: {platform.platform()}")
-    print(f"Python version: {platform.python_version()}")
-    print(f"PyTorch version: {torch.__version__}")
-    print(f"CUDA available: {torch.cuda.is_available()}")
-    print(f"MPS available: {torch.backends.mps.is_available()}\n")
+    logging.info("\nSystem Information:")
+    logging.info(f"Platform: {platform.platform()}")
+    logging.info(f"Python version: {platform.python_version()}")
+    logging.info(f"PyTorch version: {torch.__version__}")
+    logging.info(f"CUDA available: {torch.cuda.is_available()}")
+    logging.info(f"MPS available: {torch.backends.mps.is_available()}\n")
 
     # Load datasets based on argument
     datasets = []
@@ -221,7 +248,7 @@ def main():
 
     # Process each model
     for model_display, model_internal in MODEL_LIST:
-        print(f"\nProcessing model: {model_display}")
+        logging.info(f"\nProcessing model: {model_display}")
 
         # Create generator for this model
         generator = CodeGenerator(model_internal)
@@ -239,17 +266,17 @@ def main():
                 else:  # codereval dataset (list)
                     items = dataset[: args.num_samples] if args.num_samples else dataset
 
-                print(f"\nProcessing {len(items)} tasks from {dataset_name}")
+                logging.info(f"\nProcessing {len(items)} tasks from {dataset_name}")
 
                 # Process each technique for all tasks
                 techniques = ["baseline", "quality_focused", "persona", "cot", "rci"]
 
                 # First generate baseline responses for all tasks
-                print("\nGenerating baseline responses for all tasks...")
+                logging.info("\nGenerating baseline responses for all tasks...")
                 baseline_codes = process_technique_batch(generator, items, "baseline")
 
                 for technique in techniques:
-                    print(f"\nProcessing technique: {technique}")
+                    logging.info(f"\nProcessing technique: {technique}")
 
                     if technique == "baseline":
                         results = [{"baseline": r} for r in baseline_codes]
@@ -454,11 +481,11 @@ def main():
 
         finally:
             # Clean up resources after processing all tasks for this model
-            print(f"\nCleaning up resources for model: {model_display}")
+            logging.info(f"\nCleaning up resources for model: {model_display}")
             generator.cleanup()
             del generator
 
-    print(f"Done. All results saved in {args.output}")
+    logging.info(f"Done. All results saved in {args.output}")
 
 
 if __name__ == "__main__":
