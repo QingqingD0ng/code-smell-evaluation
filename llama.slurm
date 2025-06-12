@@ -6,4 +6,4 @@
 #SBATCH --partition=anywhere
 #SBATCH --nodelist=aventinus
 #SBATCH --time=1-00:00:00
-srun ./scratch/qido00001/code-smell-evaluation/run_llama.sh
+srun /scratch/qido00001/code-smell-evaluation/run_llama.sh

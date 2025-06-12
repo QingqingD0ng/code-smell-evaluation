@@ -1,13 +1,14 @@
 import os
-import csv
 import json
-from datasets import load_dataset
+from datasets import load_dataset, Dataset
 import torch
 from huggingface_hub import login
 import argparse
 import platform
-from transformers import AutoModelForCausalLM, AutoTokenizer
 import transformers
+from tqdm.auto import tqdm
+from transformers.pipelines.pt_utils import KeyDataset
+import datasets
 
 # Define the models to use
 PRODUCTION_MODELS = [
@@ -56,32 +57,19 @@ class CodeGenerator:
         self.model_name = model_name
         print(f"Using device: {self.device}")
 
-        # Use pipeline approach for phi-4 and llama models
-        if "qwen" in model_name:
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                model_name, trust_remote_code=True
-            )
-            self.model = AutoModelForCausalLM.from_pretrained(
-                model_name, device_map=self.device, trust_remote_code=True
-            ).eval()
-            self.is_pipeline = False
-        else:
-            self.model = transformers.pipeline(
-                "text-generation",
-                model=model_name,
-                model_kwargs={"torch_dtype": "auto"},
-                device_map="auto",
-            )
-            self.is_pipeline = True
-        self.history = []
+        # Use pipeline for all models
+        self.model = transformers.pipeline(
+            "text-generation",
+            model=model_name,
+            torch_dtype="float16",
+            device_map="auto",
+            max_new_tokens=512,
+        )
 
     def cleanup(self):
         """Clean up model resources and free memory"""
         if hasattr(self, "model"):
             del self.model
-        if hasattr(self, "tokenizer"):
-            del self.tokenizer
-        self.history = []
 
         # Force garbage collection
         import gc
@@ -94,72 +82,6 @@ class CodeGenerator:
 
         print(f"Cleaned up resources for model: {self.model_name}")
 
-    def generate_response(self, prompt, max_new_tokens=1024):
-        if self.is_pipeline:
-            # For phi-4 and llama, use pipeline approach
-            messages = self.history + [{"role": "user", "content": prompt}]
-            outputs = self.model(messages, max_new_tokens=max_new_tokens)
-            response = outputs[0]["generated_text"][-1]["content"]
-        else:
-            # For qwen models
-            messages = self.history + [{"role": "user", "content": prompt}]
-            text = self.tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
-            )
-            model_inputs = self.tokenizer([text], return_tensors="pt").to(self.device)
-            generated_ids = self.model.generate(
-                **model_inputs, max_new_tokens=max_new_tokens
-            )
-            generated_ids = [
-                output_ids[len(input_ids) :]
-                for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
-            ]
-            response = self.tokenizer.batch_decode(
-                generated_ids, skip_special_tokens=True
-            )[0]
-
-        # Update history
-        self.history.append({"role": "user", "content": prompt})
-        self.history.append({"role": "assistant", "content": response})
-        return response
-
-    def reset_history(self):
-        self.history = []
-
-
-def generate_cot_solution(task, generator):
-    """Generate solution using Chain of Thought prompting"""
-    # Step 1: Generate reasoning
-    initial_prompt = PROMPT_TEMPLATES["cot"]["initial"].format(task=task)
-    reasoning = generator.generate_response(initial_prompt)
-
-    # Step 2: Generate final implementation
-    final_prompt = PROMPT_TEMPLATES["cot"]["final"]
-    final_code = generator.generate_response(final_prompt)
-
-    return {"reasoning": reasoning, "final_code": final_code}
-
-
-def generate_rci_solution(task, generator):
-    """Generate solution using Review-Critique-Improve process"""
-    # Step 1: Initial code generation
-    initial_prompt = PROMPT_TEMPLATES["rci"]["initial"].format(task=task)
-    initial_code = generator.generate_response(initial_prompt)
-
-    # Step 2: Code review
-    review_prompt = PROMPT_TEMPLATES["rci"]["review"]
-    review = generator.generate_response(review_prompt)
-
-    # Step 3: Code improvement
-    improve_prompt = PROMPT_TEMPLATES["rci"]["improve"]
-    improved_code = generator.generate_response(improve_prompt)
-
-    return {
-        "initial_code": initial_code,
-        "review": review,
-        "improved_code": improved_code,
-    }
-
 
 def load_jsonl_dataset(file_path):
     """Load and process the JSONL dataset"""
@@ -171,6 +93,47 @@ def load_jsonl_dataset(file_path):
                 {"task_id": data["question_id"], "complete_prompt": data["input"]}
             )
     return tasks
+
+
+def process_technique_batch(generator, tasks, technique):
+    """Process all tasks with a specific technique using Dataset for batching"""
+    # Convert tasks to Dataset
+    task_dataset = Dataset.from_dict(
+        {
+            "task_id": [task.get("task_id") for task in tasks],
+            "prompt": [task.get("complete_prompt") for task in tasks],
+        }
+    )
+
+    if technique not in PROMPT_TEMPLATES:
+        raise ValueError(f"Unknown technique: {technique}")
+
+    # Create dataset with formatted prompts
+    prompt_dataset = Dataset.from_dict(
+        {
+            "messages": [
+                [
+                    {
+                        "role": "user",
+                        "content": PROMPT_TEMPLATES[technique].format(task=prompt),
+                    }
+                ]
+                for prompt in task_dataset["prompt"]
+            ]
+        }
+    )
+
+    # Generate responses
+    responses = list(
+        tqdm(
+            generator.model(KeyDataset(prompt_dataset, "messages")),
+            desc=f"Processing {technique}",
+            total=len(prompt_dataset),
+        )
+    )
+
+    # Return formatted results
+    return [resp[0]["generated_text"][-1]["content"] for resp in responses]
 
 
 def main():
@@ -209,22 +172,15 @@ def main():
     if not args.debug and not args.model:
         parser.error("--model is required when not in debug mode")
 
-    # Define model mapping
-    MODEL_MAP = {
-        "qwen": ("qwen", "Qwen/Qwen2.5-Coder-32B-Instruct"),
-        "phi-4": ("phi-4", "microsoft/phi-4"),
-        "llama": ("llama", "meta-llama/Llama-3.3-70B-Instruct"),
-    }
-
     # Process model selection
     if args.debug:
         MODEL_LIST = DEBUG_MODELS
     else:
         if args.model == "all":
-            selected_models = list(MODEL_MAP.keys())
+            selected_models = list(PRODUCTION_MODELS.keys())
         else:
             selected_models = [args.model.strip()]
-        MODEL_LIST = [(model, MODEL_MAP[model][1]) for model in selected_models]
+        MODEL_LIST = [(model, PRODUCTION_MODELS[model]) for model in selected_models]
 
     # Set dataset name based on argument
     DATASET_NAME = (
@@ -285,126 +241,212 @@ def main():
 
                 print(f"\nProcessing {len(items)} tasks from {dataset_name}")
 
-                # Process each task
-                for item in items:
-                    task_id = item.get("task_id")
-                    original_prompt = item.get("complete_prompt")
+                # Process each technique for all tasks
+                techniques = ["baseline", "quality_focused", "persona", "cot", "rci"]
 
-                    # Skip if task is already completed for this model
-                    if (
-                        task_id in all_results
-                        and model_display in all_results[task_id]["generations"]
-                        and all_results[task_id]["generations"][model_display]
-                    ):
-                        print(
-                            f"Skipping completed task {task_id} for model {model_display}"
+                # First generate baseline responses for all tasks
+                print("\nGenerating baseline responses for all tasks...")
+                baseline_codes = process_technique_batch(generator, items, "baseline")
+
+                for technique in techniques:
+                    print(f"\nProcessing technique: {technique}")
+
+                    if technique == "baseline":
+                        results = [{"baseline": r} for r in baseline_codes]
+                    elif technique in ["cot", "rci"]:
+                        # For CoT and RCI, use the baseline codes we already generated
+                        task_dataset = Dataset.from_dict(
+                            {
+                                "task_id": [task.get("task_id") for task in items],
+                                "prompt": [
+                                    task.get("complete_prompt") for task in items
+                                ],
+                                "baseline_code": baseline_codes,
+                            }
                         )
-                        continue
 
-                    # Initialize result dictionary for this task if not exists
-                    if task_id not in all_results:
-                        all_results[task_id] = {
-                            "dataset": dataset_name,
-                            "task_id": task_id,
-                            "original_prompt": original_prompt,
-                            "generations": {},
-                        }
-                        # Write initial task entry
-                        with open(args.output, "a", encoding="utf-8") as f:
-                            f.write(json.dumps(all_results[task_id]) + "\n")
-                            f.flush()
-
-                    # Initialize model's generations if not exists
-                    if model_display not in all_results[task_id]["generations"]:
-                        all_results[task_id]["generations"][model_display] = {}
-
-                    print(
-                        f"\nProcessing task {task_id} from {dataset_name} for model {model_display}"
-                    )
-
-                    try:
-                        # Handle regular templates
-                        print("Generating baseline solution...")
-                        baseline_code = generator.generate_response(
-                            PROMPT_TEMPLATES["baseline"].format(task=original_prompt)
-                        )
-                        all_results[task_id]["generations"][model_display][
-                            "baseline"
-                        ] = baseline_code
-                        generator.reset_history()
-                        # Write after baseline
-                        with open(args.output, "w", encoding="utf-8") as f:
-                            for tid, result in all_results.items():
-                                f.write(json.dumps(result) + "\n")
-                            f.flush()
-
-                        print("Generating quality-focused solution...")
-                        quality_code = generator.generate_response(
-                            PROMPT_TEMPLATES["quality_focused"].format(
-                                task=original_prompt
+                        if technique == "cot":
+                            # Generate reasoning using CoT initial prompt
+                            reasoning_dataset = Dataset.from_dict(
+                                {
+                                    "messages": [
+                                        [
+                                            {
+                                                "role": "user",
+                                                "content": PROMPT_TEMPLATES["cot"][
+                                                    "initial"
+                                                ].format(task=task),
+                                            }
+                                        ]
+                                        for task in task_dataset["prompt"]
+                                    ]
+                                }
                             )
+                            reasoning_responses = list(
+                                tqdm(
+                                    generator.model(
+                                        KeyDataset(reasoning_dataset, "messages")
+                                    ),
+                                    desc="Generating reasoning for CoT",
+                                    total=len(reasoning_dataset),
+                                )
+                            )
+                            # Generate final implementation
+                            final_dataset = Dataset.from_dict(
+                                {
+                                    "messages": [
+                                        messages[0]["generated_text"]
+                                        + [
+                                            {
+                                                "role": "user",
+                                                "content": PROMPT_TEMPLATES["cot"][
+                                                    "final"
+                                                ],
+                                            }
+                                        ]
+                                        for messages in reasoning_responses
+                                    ]
+                                }
+                            )
+                            final_responses = list(
+                                tqdm(
+                                    generator.model(
+                                        KeyDataset(final_dataset, "messages")
+                                    ),
+                                    desc="Generating final implementation for CoT",
+                                    total=len(final_dataset),
+                                )
+                            )
+
+                            results = [
+                                {
+                                    "cot": {
+                                        "reasoning": reasoning[0]["generated_text"][-1][
+                                            "content"
+                                        ],
+                                        "final_code": final[0]["generated_text"][-1][
+                                            "content"
+                                        ],
+                                    }
+                                }
+                                for reasoning, final in zip(
+                                    reasoning_responses, final_responses
+                                )
+                            ]
+
+                        elif technique == "rci":
+                            # Generate review
+                            review_dataset = Dataset.from_dict(
+                                {
+                                    "messages": [
+                                        [
+                                            {
+                                                "role": "user",
+                                                "content": PROMPT_TEMPLATES["rci"][
+                                                    "initial"
+                                                ].format(task=task),
+                                            },
+                                            {"role": "assistant", "content": code},
+                                            {
+                                                "role": "user",
+                                                "content": PROMPT_TEMPLATES["rci"][
+                                                    "review"
+                                                ],
+                                            },
+                                        ]
+                                        for task, code in zip(
+                                            task_dataset["prompt"],
+                                            task_dataset["baseline_code"],
+                                        )
+                                    ]
+                                }
+                            )
+                            review_responses = list(
+                                tqdm(
+                                    generator.model(
+                                        KeyDataset(review_dataset, "messages")
+                                    ),
+                                    desc="Generating review for RCI",
+                                    total=len(review_dataset),
+                                )
+                            )
+
+                            # Generate improved code
+                            improve_dataset = Dataset.from_dict(
+                                {
+                                    "messages": [
+                                        review[0]["generated_text"]
+                                        + [
+                                            {
+                                                "role": "user",
+                                                "content": PROMPT_TEMPLATES["rci"][
+                                                    "improve"
+                                                ],
+                                            }
+                                        ]
+                                        for review in review_responses
+                                    ]
+                                }
+                            )
+                            improve_responses = list(
+                                tqdm(
+                                    generator.model(
+                                        KeyDataset(improve_dataset, "messages")
+                                    ),
+                                    desc="Generating improved code for RCI",
+                                    total=len(improve_dataset),
+                                )
+                            )
+
+                            results = [
+                                {
+                                    "rci": {
+                                        "initial_code": baseline,
+                                        "review": review[0]["generated_text"][-1][
+                                            "content"
+                                        ],
+                                        "improved_code": improved[0]["generated_text"][
+                                            -1
+                                        ]["content"],
+                                    }
+                                }
+                                for baseline, review, improved in zip(
+                                    task_dataset["baseline_code"],
+                                    review_responses,
+                                    improve_responses,
+                                )
+                            ]
+                    else:
+                        results = [
+                            {technique: r}
+                            for r in process_technique_batch(
+                                generator, items, technique
+                            )
+                        ]
+
+                    # Update results for each task
+                    for task, result in zip(items, results):
+                        task_id = task.get("task_id")
+
+                        # Initialize result dictionary for this task if not exists
+                        if task_id not in all_results:
+                            all_results[task_id] = {
+                                "dataset": dataset_name,
+                                "task_id": task_id,
+                                "original_prompt": task.get("complete_prompt"),
+                                "generations": {},
+                            }
+
+                        # Initialize model's generations if not exists
+                        if model_display not in all_results[task_id]["generations"]:
+                            all_results[task_id]["generations"][model_display] = {}
+
+                        # Update with the new results
+                        all_results[task_id]["generations"][model_display].update(
+                            result
                         )
-                        all_results[task_id]["generations"][model_display][
-                            "quality_focused"
-                        ] = quality_code
-                        generator.reset_history()
-                        # Write after quality-focused
-                        with open(args.output, "w", encoding="utf-8") as f:
-                            for tid, result in all_results.items():
-                                f.write(json.dumps(result) + "\n")
-                            f.flush()
 
-                        print("Generating persona solution...")
-                        persona_code = generator.generate_response(
-                            PROMPT_TEMPLATES["persona"].format(task=original_prompt)
-                        )
-                        all_results[task_id]["generations"][model_display][
-                            "persona"
-                        ] = persona_code
-                        generator.reset_history()
-                        # Write after persona
-                        with open(args.output, "w", encoding="utf-8") as f:
-                            for tid, result in all_results.items():
-                                f.write(json.dumps(result) + "\n")
-                            f.flush()
-
-                        # Handle CoT
-                        print("Generating CoT solution...")
-                        cot_result = generate_cot_solution(original_prompt, generator)
-                        all_results[task_id]["generations"][model_display]["cot"] = {
-                            "reasoning": cot_result["reasoning"],
-                            "final_code": cot_result["final_code"],
-                        }
-                        generator.reset_history()
-                        # Write after CoT
-                        with open(args.output, "w", encoding="utf-8") as f:
-                            for tid, result in all_results.items():
-                                f.write(json.dumps(result) + "\n")
-                            f.flush()
-
-                        # Handle RCI
-                        print("Generating RCI solution...")
-                        rci_result = generate_rci_solution(original_prompt, generator)
-                        all_results[task_id]["generations"][model_display]["rci"] = {
-                            "initial_code": rci_result["initial_code"],
-                            "review": rci_result["review"],
-                            "improved_code": rci_result["improved_code"],
-                        }
-                        generator.reset_history()
-                        # Write after RCI
-                        with open(args.output, "w", encoding="utf-8") as f:
-                            for tid, result in all_results.items():
-                                f.write(json.dumps(result) + "\n")
-                            f.flush()
-
-                    except Exception as e:
-                        print(
-                            f"Error processing task {task_id} for model {model_display}: {str(e)}"
-                        )
-                        all_results[task_id]["generations"][model_display] = {
-                            "error": str(e)
-                        }
-                        # Write error state
+                        # Write results after each technique
                         with open(args.output, "w", encoding="utf-8") as f:
                             for tid, result in all_results.items():
                                 f.write(json.dumps(result) + "\n")
