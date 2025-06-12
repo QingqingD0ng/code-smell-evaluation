@@ -11,11 +11,11 @@ from transformers.pipelines.pt_utils import KeyDataset
 import datasets
 
 # Define the models to use
-PRODUCTION_MODELS = [
-    ("qwen", "Qwen/Qwen2.5-Coder-32B-Instruct"),
-    ("phi-4", "microsoft/phi-4"),
-    ("llama", "meta-llama/Llama-3.3-70B-Instruct"),
-]
+PRODUCTION_MODELS = {
+    "qwen": "Qwen/Qwen2.5-Coder-32B-Instruct",
+    "phi-4": "microsoft/phi-4",
+    "llama": "meta-llama/Llama-3.3-70B-Instruct",
+}
 
 DEBUG_MODELS = [
     ("qwen3", "Qwen/Qwen2.5-0.5B-Instruct"),
