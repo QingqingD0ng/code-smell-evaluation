@@ -163,7 +163,6 @@ def process_technique_batch(generator, tasks, technique, logging):
 
 def main():
     # Set up logging
-    logging = setup_logging()
     logging.info("Starting code generation process")
 
     # Add argument parser for debug mode
