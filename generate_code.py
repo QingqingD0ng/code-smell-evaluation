@@ -258,11 +258,15 @@ def main():
         dataset = load_dataset(DATASET_NAME, split="v0.1.4")
         if task_range:
             items = dataset.select(range(task_range[0], task_range[1]))
+        else:
+            items = dataset
 
     if args.dataset == "codereval":
         dataset = load_jsonl_dataset("dataset/CEPythonHumanLabel.jsonl")
         if task_range:
             items = dataset[task_range[0] : task_range[1]]
+        else:
+            items = dataset
 
     # Create or load existing results
     all_results = {}
