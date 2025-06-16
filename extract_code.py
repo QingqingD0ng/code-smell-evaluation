@@ -82,17 +82,6 @@ def extract_python_code(text):
     return ""
 
 
-def create_model_folders(base_path, models):
-    """Create folders for each model and their prompting techniques."""
-    # Create base directory
-    os.makedirs(base_path, exist_ok=True)
-
-    # Create folders for each model
-    for model_name, _ in models:
-        model_path = os.path.join(base_path, model_name)
-        os.makedirs(model_path, exist_ok=True)
-
-
 def save_code_to_file(code, model_path, dataset, technique, task_id):
     """Save extracted code to a Python file.
 
@@ -133,12 +122,13 @@ def process_jsonl(jsonl_path, output_base_path):
     with open(jsonl_path, "r", encoding="utf-8") as f:
         for line in f:
             row = json.loads(line)
-            task_id = row["task_id"]
-            dataset = row["dataset"]
+            task_id = row["task_id"].split("/")[-1]
+            dataset = row["dataset"].split("/")[-1]
             print(f"\nProcessing task {task_id} from {dataset}")
 
             # Process each model's generations
             for model_name, model_generations in row["generations"].items():
+                model_name = model_name.split("/")[-1]
                 print(f"Processing generations for model {model_name}")
                 model_path = os.path.join(output_base_path, model_name)
 

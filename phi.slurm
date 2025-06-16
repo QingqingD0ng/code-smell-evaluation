@@ -6,4 +6,13 @@
 #SBATCH --partition=anywhere
 #SBATCH --nodelist=aventinus
 #SBATCH --time=1-00:00:00
-srun /scratch/qido00001/code-smell-evaluation/run_phi.sh
+
+# Default values
+MODEL=${1:-"phi-3"}
+DATASET=${2:-"codereval"}
+TECHNIQUE=${3:-"baseline"}
+
+# Build the command with parameters
+CMD="python generate_code.py --model $MODEL --dataset $DATASET --technique $TECHNIQUE"
+# Run the command
+srun /scratch/qido00001/code-smell-evaluation/run_phi.sh "$CMD"
