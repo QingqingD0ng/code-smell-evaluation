@@ -2,7 +2,6 @@ import os
 import json
 import re
 import argparse
-from generate_code import PRODUCTION_MODELS, DEBUG_MODELS, PROMPT_TEMPLATES
 from collections import defaultdict
 
 

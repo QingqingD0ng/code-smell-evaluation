@@ -8,8 +8,7 @@ from datetime import datetime
 from io import StringIO
 from contextlib import redirect_stdout
 from generate_code import (
-    PRODUCTION_MODELS,
-    DEBUG_MODELS,
+    MODELS,
     PROMPT_TEMPLATES,
 )
 import argparse
@@ -785,7 +784,7 @@ def main():
     results = {}
 
     # Select models based on debug flag
-    models_to_analyze = DEBUG_MODELS if args.debug else PRODUCTION_MODELS
+    models_to_analyze = MODELS.items()
 
     # Analyze each model's results
     for model_name, _ in models_to_analyze:
