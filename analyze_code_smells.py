@@ -19,11 +19,21 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 # Set up logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[logging.FileHandler("code_analysis.log"), logging.StreamHandler()],
-)
+logger = logging.getLogger("code_analysis")
+logger.setLevel(logging.INFO)
+
+# Create handlers
+file_handler = logging.FileHandler("code_analysis.log")
+stream_handler = logging.StreamHandler()
+
+# Create formatters and add it to handlers
+log_format = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+file_handler.setFormatter(log_format)
+stream_handler.setFormatter(log_format)
+
+# Add handlers to the logger
+logger.addHandler(file_handler)
+logger.addHandler(stream_handler)
 
 # Define prompting techniques from PROMPT_TEMPLATES
 TECHNIQUES = list(PROMPT_TEMPLATES.keys())
@@ -54,10 +64,10 @@ def analyze_with_pylint(file_path):
             other_issues = [item for item in output if not is_basic_smell(item)]
             return {"fatal_errors": fatal_errors, "other_issues": other_issues}
         except json.JSONDecodeError as e:
-            logging.error(f"Failed to parse Pylint output for {file_path}: {str(e)}")
+            logger.error(f"Failed to parse Pylint output for {file_path}: {str(e)}")
             return {"fatal_errors": [], "other_issues": []}
     except subprocess.CalledProcessError as e:
-        logging.error(f"Pylint analysis failed for {file_path}: {str(e)}")
+        logger.error(f"Pylint analysis failed for {file_path}: {str(e)}")
         return {"fatal_errors": [], "other_issues": []}
 
 
@@ -105,7 +115,7 @@ def is_basic_smell(item):
     msg_id = item.get("message-id", "")
     # Check if the message ID is in our filters
     if msg_id in FILTERS:
-        logging.debug(f"Filtered out {msg_id}: {item.get('message', '')}")
+        logger.debug(f"Filtered out {msg_id}: {item.get('message', '')}")
         return True
     return False
 
@@ -125,7 +135,7 @@ def analyze_with_bandit(files, output_json="bandit_results.json"):
             return data
         return None
     except Exception as e:
-        logging.error(f"Bandit analysis failed: {str(e)}")
+        logger.error(f"Bandit analysis failed: {str(e)}")
         return None
 
 
@@ -133,7 +143,7 @@ def aggregate_bandit_results(bandit_json, output_csv):
     """Aggregate Bandit results and save to CSV"""
     smellDict = defaultdict(int)
     if not bandit_json or "results" not in bandit_json:
-        logging.warning("No Bandit results to aggregate")
+        logger.warning("No Bandit results to aggregate")
         return
 
     for item in bandit_json["results"]:
@@ -145,9 +155,9 @@ def aggregate_bandit_results(bandit_json, output_csv):
             writer = csv.writer(f)
             writer.writerow(["Message", "Count"])
             writer.writerows([[key, smellDict[key]] for key in smellDict])
-        logging.info(f"Bandit results saved to {output_csv}")
+        logger.info(f"Bandit results saved to {output_csv}")
     except Exception as e:
-        logging.error(f"Failed to save Bandit results: {str(e)}")
+        logger.error(f"Failed to save Bandit results: {str(e)}")
 
 
 def get_python_files(folder_path):
@@ -163,7 +173,7 @@ def get_python_files(folder_path):
 def analyze_folder(folder_path, output_dir):
     """Analyze all Python files in a folder and its subfolders"""
     if not os.path.exists(folder_path):
-        logging.error(f"Folder not found: {folder_path}")
+        logger.error(f"Folder not found: {folder_path}")
         return None, None
 
     # Create output directory for this technique
@@ -175,15 +185,15 @@ def analyze_folder(folder_path, output_dir):
     # Get all Python files recursively
     py_files = get_python_files(folder_path)
     if not py_files:
-        logging.warning(f"No Python files found in {folder_path}")
+        logger.warning(f"No Python files found in {folder_path}")
         return None, None
 
-    logging.info(f"Analyzing {len(py_files)} files in {dataset_name}/{technique_name}")
+    logger.info(f"Analyzing {len(py_files)} files in {dataset_name}/{technique_name}")
 
     # Analyze with Pylint
     pylint_results = defaultdict(dict)
     for file_path in py_files:
-        logging.info(f"Running Pylint on {file_path}")
+        logger.info(f"Running Pylint on {file_path}")
         pylint_output = analyze_with_pylint(file_path)
         # Get task_id from the file path, handling nested structure
         task_id = os.path.splitext(os.path.basename(file_path))[0]
@@ -222,48 +232,17 @@ def analyze_folder(folder_path, output_dir):
                             "Other Issue",
                         ]
                     )
-        logging.info(f"Pylint results saved to {pylint_csv}")
+        logger.info(f"Pylint results saved to {pylint_csv}")
     except Exception as e:
-        logging.error(f"Failed to save Pylint results: {str(e)}")
+        logger.error(f"Failed to save Pylint results: {str(e)}")
 
     # Analyze with Bandit
-    logging.info(f"Running Bandit on {len(py_files)} files")
+    logger.info(f"Running Bandit on {len(py_files)} files")
     bandit_json = analyze_with_bandit(py_files)
     bandit_csv = os.path.join(technique_output_dir, "bandit_results.csv")
     aggregate_bandit_results(bandit_json, bandit_csv)
 
     return pylint_results, bandit_json
-
-
-def analyze_syntax_errors(results):
-    """Analyze and print findings about fatal/syntax errors in the results"""
-    print("\n=== Fatal/Syntax Error Analysis ===")
-    print("Technique\tFiles with Fatal Errors\tFiles without Fatal Errors")
-    print("-" * 70)
-
-    for technique, result in results.items():
-        files_with_errors = 0
-        files_without_errors = 0
-
-        for task_id, issues in result["pylint"].items():
-            if issues["fatal_errors"]:
-                files_with_errors += 1
-            else:
-                files_without_errors += 1
-
-        print(f"{technique}\t{files_with_errors}\t\t\t{files_without_errors}")
-
-    print("\nDetailed Findings:")
-    print("-" * 70)
-    for technique, result in results.items():
-        print(f"\n{technique.upper()}:")
-        for task_id, issues in result["pylint"].items():
-            if issues["fatal_errors"]:
-                print(f"\nTask {task_id} has fatal/syntax errors:")
-                for error in issues["fatal_errors"]:
-                    print(
-                        f"  - Line {error.get('line')}: [{error.get('message-id')}] {error.get('message')}"
-                    )
 
 
 def analyze_top_smells(results):
@@ -782,6 +761,7 @@ def main():
     os.makedirs(analysis_dir, exist_ok=True)
 
     results = {}
+    syntax_error_stats = defaultdict(lambda: defaultdict(lambda: defaultdict(int)))
 
     # Select models based on debug flag
     models_to_analyze = MODELS.items()
@@ -795,7 +775,7 @@ def main():
         # Get the model's code directory
         model_code_dir = os.path.join(extracted_code_dir, model_name)
         if not os.path.exists(model_code_dir):
-            logging.warning(f"No code directory found for {model_code_dir}")
+            logger.warning(f"No code directory found for {model_code_dir}")
             continue
 
         # Analyze each dataset for this model
@@ -808,30 +788,78 @@ def main():
             for technique in TECHNIQUES:
                 technique_dir = os.path.join(dataset_dir, technique)
                 if not os.path.exists(technique_dir):
-                    logging.warning(f"No code directory found for {technique_dir}")
+                    logger.warning(f"No code directory found for {technique_dir}")
                     continue
 
                 pylint_results, bandit_results = analyze_folder(
                     technique_dir, model_dir
                 )
                 if pylint_results is not None:
-                    # Use dataset/technique as the key to store results
+                    # Count syntax errors and filter them out
+                    filtered_pylint_results = {}
+                    total_samples = len(pylint_results)
+                    samples_with_syntax_errors = 0
+
+                    for task_id, issues in pylint_results.items():
+                        has_syntax_error = False
+                        for issue in issues["other_issues"]:
+                            if issue.get("message-id") == "E0001":
+                                has_syntax_error = True
+                                samples_with_syntax_errors += 1
+                                break
+
+                        if not has_syntax_error:
+                            filtered_pylint_results[task_id] = issues
+
+                    # Store syntax error statistics
+                    syntax_error_stats[model_name][dataset][technique] = {
+                        "total_samples": total_samples,
+                        "samples_with_syntax_errors": samples_with_syntax_errors,
+                        "syntax_correct_samples": total_samples
+                        - samples_with_syntax_errors,
+                        "correctness_percentage": (
+                            (
+                                (total_samples - samples_with_syntax_errors)
+                                / total_samples
+                                * 100
+                            )
+                            if total_samples > 0
+                            else 0
+                        ),
+                    }
+
+                    # Use dataset/technique as the key to store results (only for syntax-correct samples)
                     key = f"{dataset}/{technique}"
                     model_results[key] = {
-                        "pylint": pylint_results,
+                        "pylint": filtered_pylint_results,
                         "bandit": bandit_results,
                     }
 
         if model_results:  # Only add to results if we found any data
             results[model_name] = model_results
 
+    # Print syntax error statistics
+    print("\n=== Syntax Error Analysis ===")
+    print(
+        "Model\tDataset\tTechnique\tTotal Samples\tSamples with Syntax Errors\tSyntax Correct Samples\tCorrectness %"
+    )
+    print("-" * 100)
+
+    for model_name in syntax_error_stats:
+        for dataset in syntax_error_stats[model_name]:
+            for technique in syntax_error_stats[model_name][dataset]:
+                stats = syntax_error_stats[model_name][dataset][technique]
+                print(
+                    f"{model_name}\t{dataset}\t{technique}\t{stats['total_samples']}\t{stats['samples_with_syntax_errors']}\t{stats['syntax_correct_samples']}\t{stats['correctness_percentage']:.2f}%"
+                )
+
     if not results:
-        logging.error(
+        logger.error(
             "No results found to analyze. Please check the extracted_code directory structure."
         )
         return
 
-    # Generate summary report
+    # Generate summary report (now only for syntax-correct samples)
     summary_csv = os.path.join(analysis_dir, "summary.csv")
     try:
         with open(summary_csv, "w", newline="", encoding="UTF8") as f:
@@ -841,7 +869,7 @@ def main():
                     "Model",
                     "Dataset",
                     "Technique",
-                    "Total Files",
+                    "Total Files (Syntax Correct)",
                     "Total Pylint Issues",
                     "Total Bandit Issues",
                 ]
@@ -872,13 +900,12 @@ def main():
                         ]
                     )
 
-        # Generate analysis for each model
+        # Generate analysis for each model (now only for syntax-correct samples)
         for model_name, model_results in results.items():
             model_dir = os.path.join(analysis_dir, model_name)
 
             # Define analysis functions
             analyses = {
-                "syntax_errors": analyze_syntax_errors,
                 "top_smells": analyze_top_smells,
                 "smells_by_type": analyze_top_smells_by_type,
             }
@@ -932,36 +959,6 @@ Analysis files:
 
         # Create visualizations
         create_smell_visualizations(results, analysis_dir)
-
-        # Create overall summary
-        overall_summary = f"""Code Smell Analysis Summary
-{'=' * 50}
-
-Analysis completed at: {datetime.now()}
-
-Results directory: {analysis_dir}
-Summary CSV: {summary_csv}
-
-Analyzed models:
-{chr(10).join(f'- {model_name}' for model_name in results.keys())}
-
-Each model directory contains:
-- syntax_errors.txt
-- top_smells.txt
-- smells_by_type.txt
-- statistics.txt
-- summary.txt
-
-Overall analysis:
-- comprehensive.txt
-- kruskal_wallis.txt
-- boxplot_*.png
-- heatmap.png
-"""
-        with open(
-            os.path.join(analysis_dir, "overall_summary.txt"), "w", encoding="utf-8"
-        ) as f:
-            f.write(overall_summary)
 
     except Exception as e:
         with open(os.path.join(analysis_dir, "error.txt"), "w", encoding="utf-8") as f:
