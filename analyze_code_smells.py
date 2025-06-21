@@ -8,7 +8,6 @@ from datetime import datetime
 from io import StringIO
 from contextlib import redirect_stdout
 from generate_code import (
-    MODELS,
     PROMPT_TEMPLATES,
 )
 import argparse
@@ -27,7 +26,7 @@ file_handler = logging.FileHandler("code_analysis.log")
 stream_handler = logging.StreamHandler()
 
 # Create formatters and add it to handlers
-log_format = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+log_format = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 file_handler.setFormatter(log_format)
 stream_handler.setFormatter(log_format)
 
@@ -743,13 +742,6 @@ def create_smell_visualizations(results, output_dir):
 
 
 def main():
-    # Add argument parser for debug mode
-    parser = argparse.ArgumentParser(description="Analyze code smells")
-    parser.add_argument(
-        "--debug", action="store_true", help="Run in debug mode with smaller models"
-    )
-    args = parser.parse_args()
-
     # Base directories
     extracted_code_dir = "extracted_code"
     analysis_output_dir = "analysis_results"
@@ -763,11 +755,19 @@ def main():
     results = {}
     syntax_error_stats = defaultdict(lambda: defaultdict(lambda: defaultdict(int)))
 
-    # Select models based on debug flag
-    models_to_analyze = MODELS.items()
+    # Scan the extracted_code directory to get available models
+    available_models = []
+    if os.path.exists(extracted_code_dir):
+        available_models = [
+            d
+            for d in os.listdir(extracted_code_dir)
+            if os.path.isdir(os.path.join(extracted_code_dir, d))
+        ]
+    else:
+        logger.error(f"Extracted code directory {extracted_code_dir} does not exist")
+        return
 
-    # Analyze each model's results
-    for model_name, _ in models_to_analyze:
+    for model_name in available_models:
         model_results = {}
         model_dir = os.path.join(analysis_dir, model_name)
         os.makedirs(model_dir, exist_ok=True)
@@ -919,23 +919,6 @@ def main():
                     encoding="utf-8",
                 ) as f:
                     f.write(output)
-
-            # Create model summary
-            summary = f"""Analysis for {model_name}
-{'=' * 50}
-
-Analysis completed at: {datetime.now()}
-
-Results directory: {model_dir}
-Summary CSV: {summary_csv}
-
-Analysis files:
-{chr(10).join(f'- {analysis_name}.txt' for analysis_name in analyses.keys())}
-"""
-            with open(
-                os.path.join(model_dir, "summary.txt"), "w", encoding="utf-8"
-            ) as f:
-                f.write(summary)
 
         # Generate comprehensive analysis across all models
         comprehensive_output = get_function_output(

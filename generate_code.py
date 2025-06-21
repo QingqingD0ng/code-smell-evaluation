@@ -12,12 +12,22 @@ import logging
 import time
 import traceback
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[logging.FileHandler("code_generation.log"), logging.StreamHandler()],
-)
+# Set up logging for code generation
+logger = logging.getLogger("code_generation")
+logger.setLevel(logging.INFO)
 
+# Create handlers
+file_handler = logging.FileHandler("code_generation.log")
+stream_handler = logging.StreamHandler()
+
+# Create formatters and add it to handlers
+log_format = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+file_handler.setFormatter(log_format)
+stream_handler.setFormatter(log_format)
+
+# Add handlers to the logger
+logger.addHandler(file_handler)
+logger.addHandler(stream_handler)
 
 # Define the models to use
 MODELS = {
@@ -60,7 +70,7 @@ class CodeGenerator:
     def __init__(self, model_name, max_new_tokens=512):
         self.device = get_device()
         self.model_name = model_name
-        logging.info(f"Using device: {self.device}")
+        logger.info(f"Using device: {self.device}")
 
         # Use pipeline for all models
         self.model = transformers.pipeline(
@@ -85,7 +95,7 @@ class CodeGenerator:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-        logging.info(f"Cleaned up resources for model: {self.model_name}")
+        logger.info(f"Cleaned up resources for model: {self.model_name}")
 
 
 def load_jsonl_dataset(file_path):
@@ -102,7 +112,7 @@ def load_jsonl_dataset(file_path):
 
 def process_technique_batch(generator, tasks, technique):
     """Process all tasks with a specific technique using Dataset for batching"""
-    logging.info(f"Starting {technique} processing for {len(tasks)} tasks")
+    logger.info(f"Starting {technique} processing for {len(tasks)} tasks")
     start_time = time.time()
 
     # Convert tasks to Dataset
@@ -114,7 +124,7 @@ def process_technique_batch(generator, tasks, technique):
     )
 
     if technique not in PROMPT_TEMPLATES:
-        logging.error(f"Unknown technique: {technique}")
+        logger.error(f"Unknown technique: {technique}")
         raise ValueError(f"Unknown technique: {technique}")
 
     # Create dataset with formatted prompts
@@ -141,17 +151,17 @@ def process_technique_batch(generator, tasks, technique):
                 total=len(prompt_dataset),
             )
         )
-        logging.info(
+        logger.info(
             f"Successfully generated {len(responses)} responses for {technique}"
         )
     except Exception as e:
-        logging.error(f"Error generating responses for {technique}: {str(e)}")
+        logger.error(f"Error generating responses for {technique}: {str(e)}")
         raise
 
     # Return formatted results
     results = [resp[0]["generated_text"][-1]["content"] for resp in responses]
     end_time = time.time()
-    logging.info(
+    logger.info(
         f"Completed {technique} processing in {end_time - start_time:.2f} seconds"
     )
     return results
@@ -159,7 +169,7 @@ def process_technique_batch(generator, tasks, technique):
 
 def main():
     # Set up logging
-    logging.info("Starting code generation process")
+    logger.info("Starting code generation process")
 
     # Add argument parser for debug mode
     parser = argparse.ArgumentParser(description="Generate code using various models")
@@ -215,7 +225,7 @@ def main():
 
     # Process model selection
     selected_model = MODELS[args.model]
-    logging.info(f"Using model: {selected_model}")
+    logger.info(f"Using model: {selected_model}")
 
     # Set default output filename
     if args.task_range:
@@ -224,7 +234,7 @@ def main():
         )
     else:
         args.output = f"{args.model}-{args.dataset}-{args.technique}.jsonl"
-    logging.info(f"Output will be saved to: {args.output}")
+    logger.info(f"Output will be saved to: {args.output}")
 
     # Process task range if specified
     task_range = None
@@ -232,7 +242,7 @@ def main():
         try:
             start, end = map(int, args.task_range.split("-"))
             task_range = (start, end)
-            logging.info(f"Processing tasks from {start} to {end}")
+            logger.info(f"Processing tasks from {start} to {end}")
         except ValueError:
             parser.error("Task range must be in format 'start-end' (e.g., '100-200')")
 
@@ -246,12 +256,12 @@ def main():
         login(key)
 
     # Print system information
-    logging.info("\nSystem Information:")
-    logging.info(f"Platform: {platform.platform()}")
-    logging.info(f"Python version: {platform.python_version()}")
-    logging.info(f"PyTorch version: {torch.__version__}")
-    logging.info(f"CUDA available: {torch.cuda.is_available()}")
-    logging.info(f"MPS available: {torch.backends.mps.is_available()}\n")
+    logger.info("\nSystem Information:")
+    logger.info(f"Platform: {platform.platform()}")
+    logger.info(f"Python version: {platform.python_version()}")
+    logger.info(f"PyTorch version: {torch.__version__}")
+    logger.info(f"CUDA available: {torch.cuda.is_available()}")
+    logger.info(f"MPS available: {torch.backends.mps.is_available()}\n")
 
     # Load datasets based on argument
     if args.dataset == "bigcodebench":
@@ -282,14 +292,14 @@ def main():
 
     try:
         # Process each dataset
-        logging.info(f"\nProcessing {len(items)} tasks from {args.dataset}")
+        logger.info(f"\nProcessing {len(items)} tasks from {args.dataset}")
 
         # Process each technique for all tasks
         technique = args.technique  # Only process the specified technique
 
         # First generate baseline responses for all tasks if needed
         if args.technique == "rci":
-            logging.info(f"\nLoading baseline code from {args.baseline_file}")
+            logger.info(f"\nLoading baseline code from {args.baseline_file}")
             baseline_codes = {}
             with open(args.baseline_file, "r", encoding="utf-8") as f:
                 for line in f:
@@ -307,7 +317,7 @@ def main():
                 raise ValueError(
                     f"No matching baseline code found in {args.baseline_file}"
                 )
-            logging.info(f"Found baseline code for {len(items)} tasks")
+            logger.info(f"Found baseline code for {len(items)} tasks")
 
             # Extract baseline codes in the same order as items
             baseline_codes = [baseline_codes[item.get("task_id")] for item in items]
@@ -485,16 +495,16 @@ def main():
                 f.flush()
 
     except Exception as e:
-        logging.error(f"Error processing model {selected_model}: {str(e)}")
-        logging.error(f"Error details: {traceback.format_exc()}")
+        logger.error(f"Error processing model {selected_model}: {str(e)}")
+        logger.error(f"Error details: {traceback.format_exc()}")
         raise
     finally:
         # Clean up resources after processing all tasks for this model
-        logging.info(f"\nCleaning up resources for model: {selected_model}")
+        logger.info(f"\nCleaning up resources for model: {selected_model}")
         generator.cleanup()
         del generator
 
-    logging.info(f"Done. All results saved in {args.output}")
+    logger.info(f"Done. All results saved in {args.output}")
 
 
 if __name__ == "__main__":

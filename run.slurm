@@ -10,19 +10,10 @@
 # Default values
 MODEL=${1:-"phi-3"}
 DATASET=${2:-"codereval"}
-TECHNIQUE=${3:-"baseline"}
+BASELINE_FILE=${3:-"baseline"}
 
 # Build the command with parameters
-CMD="python generate_code.py --model $MODEL --dataset $DATASET --technique $TECHNIQUE"
-
-# Add baseline file if technique is rci
-if [ "$TECHNIQUE" = "rci" ]; then
-    if [ -z "$BASELINE_FILE" ]; then
-        echo "Error: Baseline file is required for RCI technique"
-        exit 1
-    fi
-    CMD="$CMD --baseline_file $BASELINE_FILE"
-fi
+CMD="python analyze_code_smells.py --model $MODEL --dataset $DATASET --baseline_file $BASELINE_FILE --technique rci"
 
 # Run the command
 srun /scratch/qido00001/code-smell-evaluation/run.sh "$CMD"
