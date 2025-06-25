@@ -203,9 +203,7 @@ def analyze_folder(folder_path, output_dir):
     try:
         with open(pylint_csv, "w", newline="", encoding="UTF8") as f:
             writer = csv.writer(f)
-            writer.writerow(
-                ["Task ID", "Message ID", "Symbol", "Message", "Line", "Type"]
-            )
+            writer.writerow(["Task ID", "Message ID", "Symbol", "Message", "Line"])
             for task_id, results in pylint_results.items():
                 # Write fatal errors
                 for item in results["fatal_errors"]:
@@ -216,7 +214,6 @@ def analyze_folder(folder_path, output_dir):
                             item.get("symbol", ""),
                             item.get("message", ""),
                             item.get("line", ""),
-                            "Fatal Error",
                         ]
                     )
                 # Write other issues
@@ -228,7 +225,6 @@ def analyze_folder(folder_path, output_dir):
                             item.get("symbol", ""),
                             item.get("message", ""),
                             item.get("line", ""),
-                            "Other Issue",
                         ]
                     )
         logger.info(f"Pylint results saved to {pylint_csv}")
@@ -795,10 +791,11 @@ def main():
                     technique_dir, model_dir
                 )
                 if pylint_results is not None:
-                    # Count syntax errors and filter them out
+                    # Track files with syntax errors
                     filtered_pylint_results = {}
                     total_samples = len(pylint_results)
                     samples_with_syntax_errors = 0
+                    syntax_error_task_ids = set()
 
                     for task_id, issues in pylint_results.items():
                         has_syntax_error = False
@@ -806,10 +803,33 @@ def main():
                             if issue.get("message-id") == "E0001":
                                 has_syntax_error = True
                                 samples_with_syntax_errors += 1
+                                syntax_error_task_ids.add(task_id)
                                 break
-
                         if not has_syntax_error:
                             filtered_pylint_results[task_id] = issues
+
+                    # Filter Bandit results to exclude files with syntax errors
+                    filtered_bandit_results = None
+                    if bandit_results and "results" in bandit_results:
+                        filtered_bandit_results = bandit_results.copy()
+                        filtered_bandit_results["results"] = [
+                            item
+                            for item in bandit_results["results"]
+                            if os.path.splitext(os.path.basename(item["filename"]))[0]
+                            not in syntax_error_task_ids
+                        ]
+                        # Also filter out bandit 'errors' for syntax error files
+                        if "errors" in bandit_results:
+                            filtered_bandit_results["errors"] = [
+                                err
+                                for err in bandit_results["errors"]
+                                if os.path.splitext(os.path.basename(err["filename"]))[
+                                    0
+                                ]
+                                not in syntax_error_task_ids
+                            ]
+                    else:
+                        filtered_bandit_results = bandit_results
 
                     # Store syntax error statistics
                     syntax_error_stats[model_name][dataset][technique] = {
@@ -832,7 +852,7 @@ def main():
                     key = f"{dataset}/{technique}"
                     model_results[key] = {
                         "pylint": filtered_pylint_results,
-                        "bandit": bandit_results,
+                        "bandit": filtered_bandit_results,
                     }
 
         if model_results:  # Only add to results if we found any data
