@@ -8,12 +8,12 @@
 #SBATCH --time=1-00:00:00
 
 # Default values
-MODEL=${1:-"phi-3"}
+MODEL=${1:-"qwen"}
 DATASET=${2:-"codereval"}
-BASELINE_FILE=${3:-"baseline"}
-
+TECHNIQUE=${3:-"baseline"}
+TASK_RANGE=${4:-"0-10"}
 # Build the command with parameters
-CMD="python analyze_code_smells.py --model $MODEL --dataset $DATASET --baseline_file $BASELINE_FILE --technique rci"
+CMD="python generate_code.py --model $MODEL --dataset $DATASET --technique $TECHNIQUE --task_range $TASK_RANGE"
 
 # Run the command
 srun /scratch/qido00001/code-smell-evaluation/run.sh "$CMD"

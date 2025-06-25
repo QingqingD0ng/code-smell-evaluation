@@ -242,7 +242,7 @@ def analyze_folder(folder_path, output_dir):
 
 def analyze_top_smells(results):
     """Analyze and display the top 10 most common code smells across all techniques"""
-    print("\n=== Top 10 Code Smells Analysis ===")
+    logger.info("\n=== Top 10 Code Smells Analysis ===")
 
     # Dictionary to store smell counts
     smell_counts = defaultdict(int)
@@ -292,25 +292,25 @@ def analyze_top_smells(results):
     top_smells = sorted(smell_counts.items(), key=lambda x: x[1], reverse=True)[:10]
 
     # Print results
-    print("\nRank  Count  Message ID - Symbol")
-    print("-" * 50)
+    logger.info("\nRank  Count  Message ID - Symbol")
+    logger.info("-" * 50)
     for rank, (smell, count) in enumerate(top_smells, 1):
-        print(f"{rank:2d}.    {count:3d}    {smell}")
+        logger.info(f"{rank:2d}.    {count:3d}    {smell}")
 
-    print("\nDetailed Examples:")
-    print("-" * 50)
+    logger.info("\nDetailed Examples:")
+    logger.info("-" * 50)
     for rank, (smell, count) in enumerate(top_smells, 1):
-        print(f"\n{rank}. {smell} (occurred {count} times)")
-        print("Examples:")
+        logger.info(f"\n{rank}. {smell} (occurred {count} times)")
+        logger.info("Examples:")
         for example in smell_details[smell]:
-            print(
+            logger.info(
                 f"  - {example['technique']}/{example['task']} (line {example['line']}): {example['message']}"
             )
 
 
 def analyze_top_smells_by_type(results):
     """Analyze and display the top 5 code smells for each Pylint message type"""
-    print("\n=== Top 5 Code Smells by Message Type ===")
+    logger.info("\n=== Top 5 Code Smells by Message Type ===")
 
     # Dictionary to store smell counts by type
     smell_types = {
@@ -373,8 +373,8 @@ def analyze_top_smells_by_type(results):
 
     # Print results for each type
     for msg_type, type_name in smell_types.items():
-        print(f"\n{type_name} Messages (starting with '{msg_type}'):")
-        print("-" * 70)
+        logger.info(f"\n{type_name} Messages (starting with '{msg_type}'):")
+        logger.info("-" * 70)
 
         # Get top 5 for this type
         top_smells = sorted(
@@ -382,35 +382,38 @@ def analyze_top_smells_by_type(results):
         )[:5]
 
         if not top_smells:
-            print("No issues found of this type.")
+            logger.info("No issues found of this type.")
             continue
 
-        print("\nRank  Count  Message ID - Symbol")
-        print("-" * 50)
+        logger.info("\nRank  Count  Message ID - Symbol")
+        logger.info("-" * 50)
         for rank, (smell, count) in enumerate(top_smells, 1):
-            print(f"{rank:2d}.    {count:3d}    {smell}")
+            logger.info(f"{rank:2d}.    {count:3d}    {smell}")
 
-        print("\nDetailed Examples:")
-        print("-" * 50)
+        logger.info("\nDetailed Examples:")
+        logger.info("-" * 50)
         for rank, (smell, count) in enumerate(top_smells, 1):
-            print(f"\n{rank}. {smell} (occurred {count} times)")
-            print("Examples:")
+            logger.info(f"\n{rank}. {smell} (occurred {count} times)")
+            logger.info("Examples:")
             for example in type_details[msg_type][smell]:
-                print(
+                logger.info(
                     f"  - {example['technique']}/{example['task']} "
                     f"(line {example['line']}): {example['message']}"
                 )
 
 
-def generate_comprehensive_table(results):
-    """Generate a comprehensive table of all code smell statistics"""
-    print("\n=== Comprehensive Code Smell Analysis Table ===")
+def generate_comprehensive_table(results, syntax_error_stats):
+    """Generate a comprehensive table of all code smell statistics, including syntax error analysis"""
+    logger.info("\n=== Comprehensive Code Smell Analysis Table ===")
 
     # Headers for the table
     headers = [
         "Model",
         "Dataset",
         "Technique",
+        "# Syntax Error Instances",
+        "# Syntax Correct Samples",
+        "Correctness %",
         "# Error Instances",
         "# Convention Instances",
         "# Refactor Instances",
@@ -422,18 +425,33 @@ def generate_comprehensive_table(results):
     ]
 
     # Print table header
-    print("\n|" + "|".join(f" {h:^30} " for h in headers))
-    print("|" + "|".join("-" * 32 for _ in headers) + "|")
+    logger.info("\n|" + "|".join(f" {h:^20} " for h in headers))
+    logger.info("|" + "|".join("-" * 22 for _ in headers) + "|")
 
     # Store counts for each model and technique
     model_technique_counts = {}
+    total_syntax_errors = 0
+    total_syntax_correct = 0
+    total_correctness = []
 
     # Process each model and its techniques
     for model_name, model_results in results.items():
         model_technique_counts[model_name] = {}
-
         for key, result in model_results.items():
             dataset, technique = key.split("/")
+            # Get syntax error stats for this model/dataset/technique
+            syntax_stats = (
+                syntax_error_stats.get(model_name, {})
+                .get(dataset, {})
+                .get(technique, {})
+            )
+            syntax_errors = syntax_stats.get("samples_with_syntax_errors", 0)
+            syntax_correct = syntax_stats.get("syntax_correct_samples", 0)
+            correctness_pct = syntax_stats.get("correctness_percentage", 0)
+            total_syntax_errors += syntax_errors
+            total_syntax_correct += syntax_correct
+            total_correctness.append((syntax_correct, syntax_errors))
+
             # Initialize counters
             error_count = 0
             convention_count = 0
@@ -445,15 +463,12 @@ def generate_comprehensive_table(results):
             # Count issues by type
             for task_id, issues in result["pylint"].items():
                 has_issues = False
-
                 for issue in issues["other_issues"]:
                     msg_id = issue.get("message-id", "")
                     if not msg_id:
                         continue
-
                     msg_type = msg_id[0]
                     has_issues = True
-
                     if msg_type == "E":
                         error_count += 1
                     elif msg_type == "C":
@@ -462,12 +477,10 @@ def generate_comprehensive_table(results):
                         refactor_count += 1
                     elif msg_type == "W":
                         warning_count += 1
-
                 # Count security smells
                 if result["bandit"] and "results" in result["bandit"]:
                     security_count += len(result["bandit"]["results"])
                     has_issues = True
-
                 if has_issues:
                     smelly_samples += 1
 
@@ -484,6 +497,9 @@ def generate_comprehensive_table(results):
 
             # Store counts for this technique
             model_technique_counts[model_name][key] = {
+                "syntax_errors": syntax_errors,
+                "syntax_correct": syntax_correct,
+                "correctness_pct": correctness_pct,
                 "error": error_count,
                 "convention": convention_count,
                 "refactor": refactor_count,
@@ -499,6 +515,9 @@ def generate_comprehensive_table(results):
                 model_name,
                 dataset,
                 technique,
+                str(syntax_errors),
+                str(syntax_correct),
+                f"{correctness_pct:.2f}%",
                 str(error_count),
                 str(convention_count),
                 str(refactor_count),
@@ -508,10 +527,10 @@ def generate_comprehensive_table(results):
                 str(smelly_samples),
                 f"{avg_smells:.2f}",
             ]
-            print("|" + "|".join(f" {v:^30} " for v in row))
+            logger.info("|" + "|".join(f" {v:^20} " for v in row))
 
     # Print total row
-    print("|" + "|".join("-" * 32 for _ in headers) + "|")
+    logger.info("|" + "|".join("-" * 22 for _ in headers) + "|")
 
     # Calculate totals across all models and techniques
     total_error = sum(
@@ -554,6 +573,14 @@ def generate_comprehensive_table(results):
         for model_results in results.values()
         for result in model_results.values()
     )
+    # Totals for syntax errors
+    total_correct = total_syntax_correct
+    total_syntax = total_syntax_errors
+    total_correctness_pct = (
+        (total_correct / (total_correct + total_syntax) * 100)
+        if (total_correct + total_syntax) > 0
+        else 0
+    )
     overall_avg = total_instances / total_samples if total_samples > 0 else 0
 
     # Print total row
@@ -561,6 +588,9 @@ def generate_comprehensive_table(results):
         "TOTAL",
         "",
         "",
+        str(total_syntax),
+        str(total_correct),
+        f"{total_correctness_pct:.2f}%",
         str(total_error),
         str(total_convention),
         str(total_refactor),
@@ -570,12 +600,12 @@ def generate_comprehensive_table(results):
         str(total_smelly),
         f"{overall_avg:.2f}",
     ]
-    print("|" + "|".join(f" {v:^30} " for v in total_row))
+    logger.info("|" + "|".join(f" {v:^20} " for v in total_row))
 
 
 def perform_kruskal_wallis_test(results):
     """Perform Kruskal-Wallis test for different prompt techniques"""
-    print("\n=== Kruskal-Wallis Test Results ===")
+    logger.info("\n=== Kruskal-Wallis Test Results ===")
 
     # Convert results to DataFrame format
     data = []
@@ -619,7 +649,7 @@ def perform_kruskal_wallis_test(results):
         # Check if we have enough techniques to compare
         techniques = group["technique"].unique()
         if len(techniques) < 2:
-            print(
+            logger.info(
                 f"\nSkipping {model} on {dataset}: Insufficient techniques to compare (found {len(techniques)})"
             )
             continue
@@ -631,7 +661,7 @@ def perform_kruskal_wallis_test(results):
 
         # Check if we have enough data points
         if any(len(sample) < 2 for sample in samples):
-            print(
+            logger.info(
                 f"\nSkipping {model} on {dataset}: Insufficient data points for some techniques"
             )
             continue
@@ -650,18 +680,18 @@ def perform_kruskal_wallis_test(results):
                 }
             )
         except Exception as e:
-            print(f"\nError performing test for {model} on {dataset}: {str(e)}")
+            logger.error(f"\nError performing test for {model} on {dataset}: {str(e)}")
             continue
 
     if not test_results:
-        print("\nNo valid test results to report")
+        logger.warning("\nNo valid test results to report")
         return []
 
     # Print results in a table format
-    print("\nModel\tDataset\tH-statistic\tp-value\tSignificant")
-    print("-" * 70)
+    logger.info("\nModel\tDataset\tH-statistic\tp-value\tSignificant")
+    logger.info("-" * 70)
     for result in test_results:
-        print(
+        logger.info(
             f"{result['model']}\t{result['dataset']}\t{result['h_statistic']:.2f}\t{result['p_value']:.4f}\t{result['significant']}"
         )
 
@@ -670,7 +700,7 @@ def perform_kruskal_wallis_test(results):
 
 def create_smell_visualizations(results, output_dir):
     """Create visualizations of code smell and security smell distributions"""
-    print("\nCreating visualizations...")
+    logger.info("\nCreating visualizations...")
 
     # Convert results to DataFrame format
     data = []
@@ -859,17 +889,17 @@ def main():
             results[model_name] = model_results
 
     # Print syntax error statistics
-    print("\n=== Syntax Error Analysis ===")
-    print(
+    logger.info("\n=== Syntax Error Analysis ===")
+    logger.info(
         "Model\tDataset\tTechnique\tTotal Samples\tSamples with Syntax Errors\tSyntax Correct Samples\tCorrectness %"
     )
-    print("-" * 100)
+    logger.info("-" * 100)
 
     for model_name in syntax_error_stats:
         for dataset in syntax_error_stats[model_name]:
             for technique in syntax_error_stats[model_name][dataset]:
                 stats = syntax_error_stats[model_name][dataset][technique]
-                print(
+                logger.info(
                     f"{model_name}\t{dataset}\t{technique}\t{stats['total_samples']}\t{stats['samples_with_syntax_errors']}\t{stats['syntax_correct_samples']}\t{stats['correctness_percentage']:.2f}%"
                 )
 
@@ -942,7 +972,7 @@ def main():
 
         # Generate comprehensive analysis across all models
         comprehensive_output = get_function_output(
-            generate_comprehensive_table, results
+            generate_comprehensive_table, results, syntax_error_stats
         )
         with open(
             os.path.join(analysis_dir, "comprehensive.txt"),
