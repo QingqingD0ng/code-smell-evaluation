@@ -50,7 +50,7 @@ PROMPT_TEMPLATES = {
     "rci": {
         "initial": "Generate Python code for the following task. Avoid docstrings and comments. {task}",
         "review": "Review your previous answer and find code smells with it",
-        "improve": "Based on the code smells you found, improve your answer without adding docstrings or comments",
+        "improve": "Based on the code smells you found, improve your code without adding docstrings or comments",
     },
     "persona": "Act as a software quality expert. Provide outputs that a quality expert would give. Generate Python code for the following task. Avoid docstrings and comments. {task}",
 }

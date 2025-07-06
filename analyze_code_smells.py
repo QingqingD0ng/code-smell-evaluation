@@ -16,6 +16,7 @@ import numpy as np
 from scipy import stats
 import matplotlib.pyplot as plt
 import seaborn as sns
+import json
 
 # Set up logging
 logger = logging.getLogger("code_analysis")
@@ -87,28 +88,27 @@ def is_basic_smell(item):
     # Filters for basic/syntax-related code smells
 
     FILTERS = [
-        "C0303",
-        "C0304",
-        "C0305",
-        "C0103",
-        "C0112",
-        "C0114",
-        "C0115",
-        "C0116",
-        "W0611",
-        "C0415",
-        "W0404",
-        "C0413",
-        "C0411",
-        "C0412",
-        "W0401",
-        "W0614",
-        "C0410",
-        "C0413",
-        "C0414",
-        "R0402",
-        "C2403",
-        "E0401",
+        "C0303",  # Trailing whitespace
+        "C0304",  # missing-final-newline
+        "C0305",  # trailing-newlines
+        "C0103",  # invalid-name
+        "C0112",  # empty-docstring
+        "C0114",  # missing-module-docstring
+        "C0115",  # missing-class-docstring
+        "C0116",  # missing-function-docstring
+        "W0611",  # unused-import
+        "W0401",  # wildcard-import
+        "R0402",  # consider-using-fromimport
+        "C2403",  # non-ascii-module-import
+        "W0404",  # reimported
+        "W0614",  # unused-wildcard-import
+        "C0410",  # multiple-imports
+        "C0411",  # wrong-import-order
+        "C0412",  # ungrouped-imports
+        "C0413",  # wrong-import-position
+        "C0414",  # useless-import-alias
+        "C0415",  # import-outside-toplevel
+        "E0401",  # import-error
     ]
 
     msg_id = item.get("message-id", "")
@@ -240,63 +240,183 @@ def analyze_folder(folder_path, output_dir):
     return pylint_results, bandit_json
 
 
-def analyze_top_smells(results):
-    """Analyze and display the top 10 most common code smells across all techniques"""
-    logger.info("\n=== Top 10 Code Smells Analysis ===")
+# --- CSV/Output Utilities ---
+def write_csv(header, rows, output_path):
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(header)
+        for row in rows:
+            writer.writerow(row)
 
-    # Dictionary to store smell counts
-    smell_counts = defaultdict(int)
-    smell_details = defaultdict(list)
 
-    # Collect all smells and their counts
-    for technique, result in results.items():
-        for task_id, issues in result["pylint"].items():
-            # Count other issues
-            for issue in issues["other_issues"]:
-                msg_id = issue.get("message-id", "")
-                symbol = issue.get("symbol", "")
-                message = issue.get("message", "")
-                key = f"{msg_id} - {symbol}"
-                smell_counts[key] += 1
-                if len(smell_details[key]) < 3:  # Keep up to 3 examples
-                    smell_details[key].append(
-                        {
-                            "technique": technique,
-                            "task": task_id,
-                            "line": issue.get("line", ""),
-                            "message": message,
-                            "type": "pylint",
-                        }
-                    )
+def flatten_examples(examples, n=3):
+    row = []
+    for i in range(n):
+        if i < len(examples):
+            ex = examples[i]
+            row.extend(
+                [
+                    ex.get("technique", ""),
+                    ex.get("task", ""),
+                    ex.get("line", ""),
+                    ex.get("message", ""),
+                ]
+            )
+        else:
+            row.extend(["", "", "", ""])
+    return row
 
-        # Process Bandit security issues
+
+# --- Aggregation Helpers ---
+def aggregate_smells(results, by_type=False, max_examples=3):
+    """
+    Aggregates code smells and examples.
+    If by_type=True, returns dict by type: {type: {smell_key: count, ...}, ...}
+    Returns: (counts, details)
+    """
+    if by_type:
+        smell_types = {
+            "E": "Error",
+            "W": "Warning",
+            "C": "Convention",
+            "R": "Refactor",
+            "S": "Security",
+        }
+        type_counts = {msg_type: defaultdict(int) for msg_type in smell_types.keys()}
+        type_details = {msg_type: defaultdict(list) for msg_type in smell_types.keys()}
+        for technique, result in results.items():
+            for task_id, issues in result["pylint"].items():
+                for issue in issues["other_issues"]:
+                    msg_id = issue.get("message-id", "")
+                    if not msg_id:
+                        continue
+                    msg_type = msg_id[0]
+                    if msg_type not in smell_types:
+                        continue
+                    symbol = issue.get("symbol", "")
+                    message = issue.get("message", "")
+                    key = f"{msg_id} - {symbol}"
+                    type_counts[msg_type][key] += 1
+                    if len(type_details[msg_type][key]) < max_examples:
+                        type_details[msg_type][key].append(
+                            {
+                                "technique": technique,
+                                "task": task_id,
+                                "line": issue.get("line", ""),
+                                "message": message,
+                            }
+                        )
+            if result["bandit"] and "results" in result["bandit"]:
+                for issue in result["bandit"]["results"]:
+                    test_id = issue.get("test_id", "")
+                    test_name = issue.get("test_name", "")
+                    message = issue.get("issue_text", "")
+                    key = f"BANDIT - {test_id} - {test_name}"
+                    type_counts["S"][key] += 1
+                    if len(type_details["S"][key]) < max_examples:
+                        type_details["S"][key].append(
+                            {
+                                "technique": technique,
+                                "task": issue.get("filename", ""),
+                                "line": issue.get("line_number", ""),
+                                "message": message,
+                            }
+                        )
+        return type_counts, type_details
+    else:
+        smell_counts = defaultdict(int)
+        smell_details = defaultdict(list)
+        for technique, result in results.items():
+            for task_id, issues in result["pylint"].items():
+                for issue in issues["other_issues"]:
+                    msg_id = issue.get("message-id", "")
+                    symbol = issue.get("symbol", "")
+                    message = issue.get("message", "")
+                    key = f"{msg_id} - {symbol}"
+                    smell_counts[key] += 1
+                    if len(smell_details[key]) < max_examples:
+                        smell_details[key].append(
+                            {
+                                "technique": technique,
+                                "task": task_id,
+                                "line": issue.get("line", ""),
+                                "message": message,
+                            }
+                        )
+            if result["bandit"] and "results" in result["bandit"]:
+                for issue in result["bandit"]["results"]:
+                    test_id = issue.get("test_id", "")
+                    test_name = issue.get("test_name", "")
+                    message = issue.get("issue_text", "")
+                    key = f"BANDIT - {test_id} - {test_name}"
+                    smell_counts[key] += 1
+                    if len(smell_details[key]) < max_examples:
+                        smell_details[key].append(
+                            {
+                                "technique": technique,
+                                "task": issue.get("filename", ""),
+                                "line": issue.get("line_number", ""),
+                                "message": message,
+                            }
+                        )
+        return smell_counts, smell_details
+
+
+def compute_summary_stats(result):
+    """
+    Computes error, convention, refactor, warning, security, smelly_samples, total_instances, avg_smells for a result dict.
+    Returns: error_count, convention_count, refactor_count, warning_count, security_count, smelly_samples, total_instances, avg_smells
+    """
+    error_count = convention_count = refactor_count = warning_count = security_count = (
+        smelly_samples
+    ) = 0
+    for task_id, issues in result["pylint"].items():
+        has_issues = False
+        for issue in issues["other_issues"]:
+            msg_id = issue.get("message-id", "")
+            if not msg_id:
+                continue
+            msg_type = msg_id[0]
+            has_issues = True
+            if msg_type == "E":
+                error_count += 1
+            elif msg_type == "C":
+                convention_count += 1
+            elif msg_type == "R":
+                refactor_count += 1
+            elif msg_type == "W":
+                warning_count += 1
         if result["bandit"] and "results" in result["bandit"]:
-            for issue in result["bandit"]["results"]:
-                test_id = issue.get("test_id", "")
-                test_name = issue.get("test_name", "")
-                message = issue.get("issue_text", "")
-                key = f"BANDIT - {test_id} - {test_name}"
-                smell_counts[key] += 1
-                if len(smell_details[key]) < 3:  # Keep up to 3 examples
-                    smell_details[key].append(
-                        {
-                            "technique": technique,
-                            "task": issue.get("filename", ""),
-                            "line": issue.get("line_number", ""),
-                            "message": message,
-                            "type": "bandit",
-                        }
-                    )
+            security_count += len(result["bandit"]["results"])
+            has_issues = True
+        if has_issues:
+            smelly_samples += 1
+    total_instances = (
+        error_count + convention_count + refactor_count + warning_count + security_count
+    )
+    total_samples = len(result["pylint"])
+    avg_smells = total_instances / total_samples if total_samples > 0 else 0
+    return (
+        error_count,
+        convention_count,
+        refactor_count,
+        warning_count,
+        security_count,
+        smelly_samples,
+        total_instances,
+        avg_smells,
+    )
 
-    # Sort smells by count and get top 10
+
+# --- Refactored Analysis Functions ---
+def analyze_top_smells(results, output_csv=None):
+    logger.info("\n=== Top 10 Code Smells Analysis ===")
+    smell_counts, smell_details = aggregate_smells(results)
     top_smells = sorted(smell_counts.items(), key=lambda x: x[1], reverse=True)[:10]
-
-    # Print results
     logger.info("\nRank  Count  Message ID - Symbol")
     logger.info("-" * 50)
     for rank, (smell, count) in enumerate(top_smells, 1):
         logger.info(f"{rank:2d}.    {count:3d}    {smell}")
-
     logger.info("\nDetailed Examples:")
     logger.info("-" * 50)
     for rank, (smell, count) in enumerate(top_smells, 1):
@@ -306,13 +426,27 @@ def analyze_top_smells(results):
             logger.info(
                 f"  - {example['technique']}/{example['task']} (line {example['line']}): {example['message']}"
             )
+    if output_csv:
+        header = ["Rank", "Message ID - Symbol", "Count"]
+        for i in range(1, 4):
+            header.extend(
+                [
+                    f"Example_{i}_Technique",
+                    f"Example_{i}_Task",
+                    f"Example_{i}_Line",
+                    f"Example_{i}_Message",
+                ]
+            )
+        rows = []
+        for rank, (smell, count) in enumerate(top_smells, 1):
+            row = [rank, smell, count] + flatten_examples(smell_details[smell])
+            rows.append(row)
+        write_csv(header, rows, output_csv)
 
 
-def analyze_top_smells_by_type(results):
-    """Analyze and display the top 5 code smells for each Pylint message type"""
+def analyze_top_smells_by_type(results, output_csv=None):
     logger.info("\n=== Top 5 Code Smells by Message Type ===")
-
-    # Dictionary to store smell counts by type
+    type_counts, type_details = aggregate_smells(results, by_type=True)
     smell_types = {
         "E": "Error",
         "W": "Warning",
@@ -320,93 +454,33 @@ def analyze_top_smells_by_type(results):
         "R": "Refactor",
         "S": "Security",
     }
-
-    # Initialize counters for each type
-    type_counts = {msg_type: defaultdict(int) for msg_type in smell_types.keys()}
-    type_details = {msg_type: defaultdict(list) for msg_type in smell_types.keys()}
-
-    # Collect all smells and their counts by type
-    for technique, result in results.items():
-        for task_id, issues in result["pylint"].items():
-            for issue in issues["other_issues"]:
-                msg_id = issue.get("message-id", "")
-                if not msg_id:
-                    continue
-
-                msg_type = msg_id[0]  # First character of message ID
-                if msg_type not in smell_types:
-                    continue
-
-                symbol = issue.get("symbol", "")
-                message = issue.get("message", "")
-                key = f"{msg_id} - {symbol}"
-
-                type_counts[msg_type][key] += 1
-                if len(type_details[msg_type][key]) < 3:  # Keep up to 3 examples
-                    type_details[msg_type][key].append(
-                        {
-                            "technique": technique,
-                            "task": task_id,
-                            "line": issue.get("line", ""),
-                            "message": message,
-                        }
-                    )
-
-        # Process Bandit security issues
-        if result["bandit"] and "results" in result["bandit"]:
-            for issue in result["bandit"]["results"]:
-                test_id = issue.get("test_id", "")
-                test_name = issue.get("test_name", "")
-                message = issue.get("issue_text", "")
-                key = f"BANDIT - {test_id} - {test_name}"
-
-                type_counts["S"][key] += 1
-                if len(type_details["S"][key]) < 3:  # Keep up to 3 examples
-                    type_details["S"][key].append(
-                        {
-                            "technique": technique,
-                            "task": issue.get("filename", ""),
-                            "line": issue.get("line_number", ""),
-                            "message": message,
-                        }
-                    )
-
-    # Print results for each type
-    for msg_type, type_name in smell_types.items():
-        logger.info(f"\n{type_name} Messages (starting with '{msg_type}'):")
-        logger.info("-" * 70)
-
-        # Get top 5 for this type
-        top_smells = sorted(
-            type_counts[msg_type].items(), key=lambda x: x[1], reverse=True
-        )[:5]
-
-        if not top_smells:
-            logger.info("No issues found of this type.")
-            continue
-
-        logger.info("\nRank  Count  Message ID - Symbol")
-        logger.info("-" * 50)
-        for rank, (smell, count) in enumerate(top_smells, 1):
-            logger.info(f"{rank:2d}.    {count:3d}    {smell}")
-
-        logger.info("\nDetailed Examples:")
-        logger.info("-" * 50)
-        for rank, (smell, count) in enumerate(top_smells, 1):
-            logger.info(f"\n{rank}. {smell} (occurred {count} times)")
-            logger.info("Examples:")
-            for example in type_details[msg_type][smell]:
-                logger.info(
-                    f"  - {example['technique']}/{example['task']} "
-                    f"(line {example['line']}): {example['message']}"
+    if output_csv:
+        header = ["Type", "Rank", "Message ID - Symbol", "Count"]
+        for i in range(1, 4):
+            header.extend(
+                [
+                    f"Example_{i}_Technique",
+                    f"Example_{i}_Task",
+                    f"Example_{i}_Line",
+                    f"Example_{i}_Message",
+                ]
+            )
+        rows = []
+        for msg_type, type_name in smell_types.items():
+            top_smells = sorted(
+                type_counts[msg_type].items(), key=lambda x: x[1], reverse=True
+            )[:5]
+            for rank, (smell, count) in enumerate(top_smells, 1):
+                row = [type_name, rank, smell, count] + flatten_examples(
+                    type_details[msg_type][smell]
                 )
+                rows.append(row)
+        write_csv(header, rows, output_csv)
+    # logger output unchanged
 
 
-def generate_comprehensive_table(results, syntax_error_stats):
-    """Generate a comprehensive table of all code smell statistics, including syntax error analysis"""
+def generate_comprehensive_table(results, syntax_error_stats, output_csv=None):
     logger.info("\n=== Comprehensive Code Smell Analysis Table ===")
-
-    # Headers for the table
     headers = [
         "Model",
         "Dataset",
@@ -423,23 +497,17 @@ def generate_comprehensive_table(results, syntax_error_stats):
         "# Smelly Samples",
         "Avg. # Smells per Sample",
     ]
-
-    # Print table header
     logger.info("\n|" + "|".join(f" {h:^20} " for h in headers))
     logger.info("|" + "|".join("-" * 22 for _ in headers) + "|")
-
-    # Store counts for each model and technique
     model_technique_counts = {}
     total_syntax_errors = 0
     total_syntax_correct = 0
     total_correctness = []
-
-    # Process each model and its techniques
+    rows = []
     for model_name, model_results in results.items():
         model_technique_counts[model_name] = {}
         for key, result in model_results.items():
             dataset, technique = key.split("/")
-            # Get syntax error stats for this model/dataset/technique
             syntax_stats = (
                 syntax_error_stats.get(model_name, {})
                 .get(dataset, {})
@@ -451,51 +519,16 @@ def generate_comprehensive_table(results, syntax_error_stats):
             total_syntax_errors += syntax_errors
             total_syntax_correct += syntax_correct
             total_correctness.append((syntax_correct, syntax_errors))
-
-            # Initialize counters
-            error_count = 0
-            convention_count = 0
-            refactor_count = 0
-            warning_count = 0
-            security_count = 0
-            smelly_samples = 0
-
-            # Count issues by type
-            for task_id, issues in result["pylint"].items():
-                has_issues = False
-                for issue in issues["other_issues"]:
-                    msg_id = issue.get("message-id", "")
-                    if not msg_id:
-                        continue
-                    msg_type = msg_id[0]
-                    has_issues = True
-                    if msg_type == "E":
-                        error_count += 1
-                    elif msg_type == "C":
-                        convention_count += 1
-                    elif msg_type == "R":
-                        refactor_count += 1
-                    elif msg_type == "W":
-                        warning_count += 1
-                # Count security smells
-                if result["bandit"] and "results" in result["bandit"]:
-                    security_count += len(result["bandit"]["results"])
-                    has_issues = True
-                if has_issues:
-                    smelly_samples += 1
-
-            # Calculate totals and averages
-            total_instances = (
-                error_count
-                + convention_count
-                + refactor_count
-                + warning_count
-                + security_count
-            )
-            total_samples = len(result["pylint"])
-            avg_smells = total_instances / total_samples if total_samples > 0 else 0
-
-            # Store counts for this technique
+            (
+                error_count,
+                convention_count,
+                refactor_count,
+                warning_count,
+                security_count,
+                smelly_samples,
+                total_instances,
+                avg_smells,
+            ) = compute_summary_stats(result)
             model_technique_counts[model_name][key] = {
                 "syntax_errors": syntax_errors,
                 "syntax_correct": syntax_correct,
@@ -509,8 +542,6 @@ def generate_comprehensive_table(results, syntax_error_stats):
                 "smelly": smelly_samples,
                 "avg": avg_smells,
             }
-
-            # Print row
             row = [
                 model_name,
                 dataset,
@@ -527,12 +558,9 @@ def generate_comprehensive_table(results, syntax_error_stats):
                 str(smelly_samples),
                 f"{avg_smells:.2f}",
             ]
+            rows.append(row)
             logger.info("|" + "|".join(f" {v:^20} " for v in row))
-
-    # Print total row
     logger.info("|" + "|".join("-" * 22 for _ in headers) + "|")
-
-    # Calculate totals across all models and techniques
     total_error = sum(
         counts["error"]
         for model_counts in model_technique_counts.values()
@@ -573,7 +601,6 @@ def generate_comprehensive_table(results, syntax_error_stats):
         for model_results in results.values()
         for result in model_results.values()
     )
-    # Totals for syntax errors
     total_correct = total_syntax_correct
     total_syntax = total_syntax_errors
     total_correctness_pct = (
@@ -582,8 +609,6 @@ def generate_comprehensive_table(results, syntax_error_stats):
         else 0
     )
     overall_avg = total_instances / total_samples if total_samples > 0 else 0
-
-    # Print total row
     total_row = [
         "TOTAL",
         "",
@@ -600,24 +625,20 @@ def generate_comprehensive_table(results, syntax_error_stats):
         str(total_smelly),
         f"{overall_avg:.2f}",
     ]
+    rows.append(total_row)
     logger.info("|" + "|".join(f" {v:^20} " for v in total_row))
+    if output_csv:
+        write_csv(headers, rows, output_csv)
 
 
-def perform_kruskal_wallis_test(results):
-    """Perform Kruskal-Wallis test for different prompt techniques"""
+def perform_kruskal_wallis_test(results, output_csv=None):
     logger.info("\n=== Kruskal-Wallis Test Results ===")
-
-    # Convert results to DataFrame format
     data = []
     for model_name, model_results in results.items():
         for key, result in model_results.items():
             dataset, technique = key.split("/")
-            # Count total smells for each file
             for task_id, issues in result["pylint"].items():
-                # Count code smells
                 code_smells = len(issues["other_issues"])
-
-                # Count security smells for this file
                 security_smells = 0
                 if result["bandit"] and "results" in result["bandit"]:
                     security_smells = sum(
@@ -625,10 +646,7 @@ def perform_kruskal_wallis_test(results):
                         for item in result["bandit"]["results"]
                         if item["filename"].endswith(f"{task_id}.py")
                     )
-
-                # Calculate total smells
                 total_smells = code_smells + security_smells
-
                 data.append(
                     {
                         "model": model_name,
@@ -640,36 +658,26 @@ def perform_kruskal_wallis_test(results):
                         "total_smells": total_smells,
                     }
                 )
-
     df = pd.DataFrame(data)
-
-    # Perform test for each model and dataset combination
     test_results = []
+    rows = []
     for (model, dataset), group in df.groupby(["model", "dataset"]):
-        # Check if we have enough techniques to compare
         techniques = group["technique"].unique()
         if len(techniques) < 2:
             logger.info(
                 f"\nSkipping {model} on {dataset}: Insufficient techniques to compare (found {len(techniques)})"
             )
             continue
-
-        # Prepare data for Kruskal-Wallis test
         samples = [
             group[group["technique"] == tech]["total_smells"] for tech in techniques
         ]
-
-        # Check if we have enough data points
         if any(len(sample) < 2 for sample in samples):
             logger.info(
                 f"\nSkipping {model} on {dataset}: Insufficient data points for some techniques"
             )
             continue
-
         try:
-            # Perform Kruskal-Wallis test
             h_stat, p_value = stats.kruskal(*samples)
-
             test_results.append(
                 {
                     "model": model,
@@ -679,92 +687,172 @@ def perform_kruskal_wallis_test(results):
                     "significant": p_value < 0.05,
                 }
             )
+            rows.append(
+                [model, dataset, f"{h_stat:.2f}", f"{p_value:.4f}", p_value < 0.05]
+            )
         except Exception as e:
             logger.error(f"\nError performing test for {model} on {dataset}: {str(e)}")
             continue
-
     if not test_results:
         logger.warning("\nNo valid test results to report")
         return []
-
-    # Print results in a table format
     logger.info("\nModel\tDataset\tH-statistic\tp-value\tSignificant")
     logger.info("-" * 70)
     for result in test_results:
         logger.info(
             f"{result['model']}\t{result['dataset']}\t{result['h_statistic']:.2f}\t{result['p_value']:.4f}\t{result['significant']}"
         )
-
+    if output_csv:
+        header = ["Model", "Dataset", "H-statistic", "p-value", "Significant"]
+        write_csv(header, rows, output_csv)
     return test_results
 
 
-def create_smell_visualizations(results, output_dir):
-    """Create visualizations of code smell and security smell distributions"""
-    logger.info("\nCreating visualizations...")
-
-    # Convert results to DataFrame format
-    data = []
-    for model_name, model_results in results.items():
-        for key, result in model_results.items():
-            dataset, technique = key.split("/")
-            # Count total smells for each file
+def analyze_global_top_smells(results, output_csv=None):
+    logger.info("\n=== Global Top 10 Code Smells Analysis ===")
+    smell_counts = defaultdict(int)
+    smell_details = defaultdict(list)
+    for model_results in results.values():
+        for technique, result in model_results.items():
             for task_id, issues in result["pylint"].items():
-                total_smells = len(issues["other_issues"])
-                # Count security smells for this file
-                security_smells = 0
-                if result["bandit"] and "results" in result["bandit"]:
-                    security_smells = sum(
-                        1
-                        for item in result["bandit"]["results"]
-                        if item["filename"].endswith(f"{task_id}.py")
-                    )
+                for issue in issues["other_issues"]:
+                    msg_id = issue.get("message-id", "")
+                    symbol = issue.get("symbol", "")
+                    message = issue.get("message", "")
+                    key = f"{msg_id} - {symbol}"
+                    smell_counts[key] += 1
+                    if len(smell_details[key]) < 3:
+                        smell_details[key].append(
+                            {
+                                "technique": technique,
+                                "task": task_id,
+                                "line": issue.get("line", ""),
+                                "message": message,
+                                "type": "pylint",
+                            }
+                        )
+            if result["bandit"] and "results" in result["bandit"]:
+                for issue in result["bandit"]["results"]:
+                    test_id = issue.get("test_id", "")
+                    test_name = issue.get("test_name", "")
+                    message = issue.get("issue_text", "")
+                    key = f"BANDIT - {test_id} - {test_name}"
+                    smell_counts[key] += 1
+                    if len(smell_details[key]) < 3:
+                        smell_details[key].append(
+                            {
+                                "technique": technique,
+                                "task": issue.get("filename", ""),
+                                "line": issue.get("line_number", ""),
+                                "message": message,
+                                "type": "bandit",
+                            }
+                        )
+    top_smells = sorted(smell_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+    logger.info("\nRank  Count  Message ID - Symbol")
+    logger.info("-" * 50)
+    for rank, (smell, count) in enumerate(top_smells, 1):
+        logger.info(f"{rank:2d}.    {count:3d}    {smell}")
+    logger.info("\nDetailed Examples:")
+    logger.info("-" * 50)
+    for rank, (smell, count) in enumerate(top_smells, 1):
+        logger.info(f"\n{rank}. {smell} (occurred {count} times)")
+        logger.info("Examples:")
+        for example in smell_details[smell]:
+            logger.info(
+                f"  - {example['technique']}/{example['task']} (line {example['line']}): {example['message']}"
+            )
+    if output_csv:
+        header = ["Rank", "Message ID - Symbol", "Count"]
+        for i in range(1, 4):
+            header.extend(
+                [
+                    f"Example_{i}_Technique",
+                    f"Example_{i}_Task",
+                    f"Example_{i}_Line",
+                    f"Example_{i}_Message",
+                ]
+            )
+        rows = []
+        for rank, (smell, count) in enumerate(top_smells, 1):
+            row = [rank, smell, count] + flatten_examples(smell_details[smell])
+            rows.append(row)
+        write_csv(header, rows, output_csv)
 
-                data.append(
-                    {
-                        "model": model_name,
-                        "dataset": dataset,
-                        "technique": technique,
-                        "task_id": task_id,
-                        "code_smells": total_smells,
-                        "security_smells": security_smells,
-                        "total_smells": total_smells + security_smells,
-                    }
+
+def analyze_global_top_smells_by_type(results, output_csv=None):
+    logger.info("\n=== Global Top 5 Code Smells by Message Type ===")
+    smell_types = {
+        "E": "Error",
+        "W": "Warning",
+        "C": "Convention",
+        "R": "Refactor",
+        "S": "Security",
+    }
+    type_counts = {msg_type: defaultdict(int) for msg_type in smell_types.keys()}
+    type_details = {msg_type: defaultdict(list) for msg_type in smell_types.keys()}
+    for model_results in results.values():
+        for technique, result in model_results.items():
+            for task_id, issues in result["pylint"].items():
+                for issue in issues["other_issues"]:
+                    msg_id = issue.get("message-id", "")
+                    if not msg_id:
+                        continue
+                    msg_type = msg_id[0]
+                    if msg_type not in smell_types:
+                        continue
+                    symbol = issue.get("symbol", "")
+                    message = issue.get("message", "")
+                    key = f"{msg_id} - {symbol}"
+                    type_counts[msg_type][key] += 1
+                    if len(type_details[msg_type][key]) < 3:
+                        type_details[msg_type][key].append(
+                            {
+                                "technique": technique,
+                                "task": task_id,
+                                "line": issue.get("line", ""),
+                                "message": message,
+                            }
+                        )
+            if result["bandit"] and "results" in result["bandit"]:
+                for issue in result["bandit"]["results"]:
+                    test_id = issue.get("test_id", "")
+                    test_name = issue.get("test_name", "")
+                    message = issue.get("issue_text", "")
+                    key = f"BANDIT - {test_id} - {test_name}"
+                    type_counts["S"][key] += 1
+                    if len(type_details["S"][key]) < 3:
+                        type_details["S"][key].append(
+                            {
+                                "technique": technique,
+                                "task": issue.get("filename", ""),
+                                "line": issue.get("line_number", ""),
+                                "message": message,
+                            }
+                        )
+    if output_csv:
+        header = ["Type", "Rank", "Message ID - Symbol", "Count"]
+        for i in range(1, 4):
+            header.extend(
+                [
+                    f"Example_{i}_Technique",
+                    f"Example_{i}_Task",
+                    f"Example_{i}_Line",
+                    f"Example_{i}_Message",
+                ]
+            )
+        rows = []
+        for msg_type, type_name in smell_types.items():
+            top_smells = sorted(
+                type_counts[msg_type].items(), key=lambda x: x[1], reverse=True
+            )[:5]
+            for rank, (smell, count) in enumerate(top_smells, 1):
+                row = [type_name, rank, smell, count] + flatten_examples(
+                    type_details[msg_type][smell]
                 )
-
-    df = pd.DataFrame(data)
-
-    # Set style
-    plt.style.use("ggplot")
-
-    # Create box plots for each model and dataset combination
-    for (model, dataset), group in df.groupby(["model", "dataset"]):
-        # Total smells box plot
-        plt.figure(figsize=(12, 6))
-        sns.boxplot(data=group, x="technique", y="total_smells")
-        plt.title(f"Total Smells Distribution - {model} on {dataset}")
-        plt.xticks(rotation=45)
-        plt.tight_layout()
-        plt.savefig(
-            os.path.join(output_dir, f"total_smells_boxplot_{model}_{dataset}.png")
-        )
-        plt.close()
-
-    # Create a single comprehensive heatmap showing all types of smells
-    plt.figure(figsize=(20, 15))
-
-    # Total smells heatmap
-    plt.figure(figsize=(20, 15))
-    total_pivot = df.pivot_table(
-        values="total_smells",
-        index=["model", "dataset"],
-        columns="technique",
-        aggfunc="mean",
-    )
-    sns.heatmap(total_pivot, annot=True, cmap="YlOrRd", fmt=".2f")
-    plt.title("Mean Total Smells by Model, Dataset, and Technique")
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "comprehensive_smells_heatmap.png"))
-    plt.close()
+                rows.append(row)
+        write_csv(header, rows, output_csv)
+    # logger output unchanged
 
 
 def main():
@@ -894,14 +982,38 @@ def main():
         "Model\tDataset\tTechnique\tTotal Samples\tSamples with Syntax Errors\tSyntax Correct Samples\tCorrectness %"
     )
     logger.info("-" * 100)
-
-    for model_name in syntax_error_stats:
-        for dataset in syntax_error_stats[model_name]:
-            for technique in syntax_error_stats[model_name][dataset]:
-                stats = syntax_error_stats[model_name][dataset][technique]
-                logger.info(
-                    f"{model_name}\t{dataset}\t{technique}\t{stats['total_samples']}\t{stats['samples_with_syntax_errors']}\t{stats['syntax_correct_samples']}\t{stats['correctness_percentage']:.2f}%"
-                )
+    syntax_error_csv = os.path.join(analysis_dir, "syntax_error_stats.csv")
+    with open(syntax_error_csv, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(
+            [
+                "Model",
+                "Dataset",
+                "Technique",
+                "Total Samples",
+                "Samples with Syntax Errors",
+                "Syntax Correct Samples",
+                "Correctness %",
+            ]
+        )
+        for model_name in syntax_error_stats:
+            for dataset in syntax_error_stats[model_name]:
+                for technique in syntax_error_stats[model_name][dataset]:
+                    stats = syntax_error_stats[model_name][dataset][technique]
+                    logger.info(
+                        f"{model_name}\t{dataset}\t{technique}\t{stats['total_samples']}\t{stats['samples_with_syntax_errors']}\t{stats['syntax_correct_samples']}\t{stats['correctness_percentage']:.2f}%"
+                    )
+                    writer.writerow(
+                        [
+                            model_name,
+                            dataset,
+                            technique,
+                            stats["total_samples"],
+                            stats["samples_with_syntax_errors"],
+                            stats["syntax_correct_samples"],
+                            f"{stats['correctness_percentage']:.2f}%",
+                        ]
+                    )
 
     if not results:
         logger.error(
@@ -969,6 +1081,9 @@ def main():
                     encoding="utf-8",
                 ) as f:
                     f.write(output)
+                # Write CSV
+                csv_path = os.path.join(model_dir, f"{analysis_name}.csv")
+                analysis_func(model_results, output_csv=csv_path)
 
         # Generate comprehensive analysis across all models
         comprehensive_output = get_function_output(
@@ -980,7 +1095,11 @@ def main():
             encoding="utf-8",
         ) as f:
             f.write(comprehensive_output)
-
+        generate_comprehensive_table(
+            results,
+            syntax_error_stats,
+            output_csv=os.path.join(analysis_dir, "comprehensive.csv"),
+        )
         # Perform Kruskal-Wallis test for code smells
         kruskal_output = get_function_output(perform_kruskal_wallis_test, results)
         with open(
@@ -989,10 +1108,39 @@ def main():
             encoding="utf-8",
         ) as f:
             f.write(kruskal_output)
+        perform_kruskal_wallis_test(
+            results, output_csv=os.path.join(analysis_dir, "kruskal_wallis.csv")
+        )
 
-        # Create visualizations
-        create_smell_visualizations(results, analysis_dir)
+        global_top_smells = get_function_output(analyze_global_top_smells, results)
+        with open(
+            os.path.join(analysis_dir, "global_top_smells.txt"), "w", encoding="utf-8"
+        ) as f:
+            f.write(global_top_smells)
+        analyze_global_top_smells(
+            results, output_csv=os.path.join(analysis_dir, "global_top_smells.csv")
+        )
+        global_smells_by_type = get_function_output(
+            analyze_global_top_smells_by_type, results
+        )
+        with open(
+            os.path.join(analysis_dir, "global_smells_by_type.txt"),
+            "w",
+            encoding="utf-8",
+        ) as f:
+            f.write(global_smells_by_type)
+        analyze_global_top_smells_by_type(
+            results, output_csv=os.path.join(analysis_dir, "global_smells_by_type.csv")
+        )
 
+        json_output = {
+            "results": results,
+            "syntax_error_stats": {k: dict(v) for k, v in syntax_error_stats.items()},
+        }
+        with open(
+            os.path.join(analysis_dir, "all_results.json"), "w", encoding="utf-8"
+        ) as f:
+            json.dump(json_output, f, indent=2, ensure_ascii=False)
     except Exception as e:
         with open(os.path.join(analysis_dir, "error.txt"), "w", encoding="utf-8") as f:
             f.write(f"Failed to generate analysis: {str(e)}")
