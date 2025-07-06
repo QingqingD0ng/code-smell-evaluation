@@ -36,15 +36,7 @@ logger.addHandler(file_handler)
 logger.addHandler(stream_handler)
 
 # Define prompting techniques from PROMPT_TEMPLATES
-TECHNIQUES = list(PROMPT_TEMPLATES.keys())
-
-
-def get_function_output(func, *args, **kwargs):
-    """Get the output of a function without printing to console"""
-    output = StringIO()
-    with redirect_stdout(output):
-        func(*args, **kwargs)
-    return output.getvalue()
+TECHNIQUES = list(PROMPT_TEMPLATES.keys()) + ["canonical"]
 
 
 def analyze_with_pylint(file_path):
@@ -367,9 +359,20 @@ def compute_summary_stats(result):
     Computes error, convention, refactor, warning, security, smelly_samples, total_instances, avg_smells for a result dict.
     Returns: error_count, convention_count, refactor_count, warning_count, security_count, smelly_samples, total_instances, avg_smells
     """
+
     error_count = convention_count = refactor_count = warning_count = security_count = (
         smelly_samples
     ) = 0
+    if result["bandit"] and "results" in result["bandit"]:
+        # Create a set of task IDs from bandit results
+        smell_sample_set = set()
+        for issue in result["bandit"]["results"]:
+            filename = issue.get("filename", "")
+            if filename:
+                basename = os.path.basename(filename)
+                task_id = os.path.splitext(basename)[0]  # Remove extension
+                smell_sample_set.add(task_id)
+
     for task_id, issues in result["pylint"].items():
         has_issues = False
         for issue in issues["other_issues"]:
@@ -386,11 +389,13 @@ def compute_summary_stats(result):
                 refactor_count += 1
             elif msg_type == "W":
                 warning_count += 1
-        if result["bandit"] and "results" in result["bandit"]:
-            security_count += len(result["bandit"]["results"])
+
+        if task_id in smell_sample_set:
             has_issues = True
+
         if has_issues:
             smelly_samples += 1
+    security_count = len(result["bandit"]["results"])
     total_instances = (
         error_count + convention_count + refactor_count + warning_count + security_count
     )
@@ -493,6 +498,9 @@ def generate_comprehensive_table(results, syntax_error_stats, output_csv=None):
         "# Refactor Instances",
         "# Warning Instances",
         "# Security Smells",
+        "# High Severity Security",
+        "# Medium Severity Security",
+        "# Low Severity Security",
         "Total Smell Instances",
         "# Smelly Samples",
         "Avg. # Smells per Sample",
@@ -519,6 +527,23 @@ def generate_comprehensive_table(results, syntax_error_stats, output_csv=None):
             total_syntax_errors += syntax_errors
             total_syntax_correct += syntax_correct
             total_correctness.append((syntax_correct, syntax_errors))
+
+            # Calculate security severity breakdown
+            high_severity = 0
+            medium_severity = 0
+            low_severity = 0
+
+            if result["bandit"] and "metrics" in result["bandit"]:
+                high_severity = result["bandit"]["metrics"]["_totals"].get(
+                    "SEVERITY.HIGH", 0
+                )
+                medium_severity = result["bandit"]["metrics"]["_totals"].get(
+                    "SEVERITY.MEDIUM", 0
+                )
+                low_severity = result["bandit"]["metrics"]["_totals"].get(
+                    "SEVERITY.LOW", 0
+                )
+
             (
                 error_count,
                 convention_count,
@@ -538,6 +563,9 @@ def generate_comprehensive_table(results, syntax_error_stats, output_csv=None):
                 "refactor": refactor_count,
                 "warning": warning_count,
                 "security": security_count,
+                "high_severity": high_severity,
+                "medium_severity": medium_severity,
+                "low_severity": low_severity,
                 "total": total_instances,
                 "smelly": smelly_samples,
                 "avg": avg_smells,
@@ -554,6 +582,9 @@ def generate_comprehensive_table(results, syntax_error_stats, output_csv=None):
                 str(refactor_count),
                 str(warning_count),
                 str(security_count),
+                str(high_severity),
+                str(medium_severity),
+                str(low_severity),
                 str(total_instances),
                 str(smelly_samples),
                 f"{avg_smells:.2f}",
@@ -583,6 +614,21 @@ def generate_comprehensive_table(results, syntax_error_stats, output_csv=None):
     )
     total_security = sum(
         counts["security"]
+        for model_counts in model_technique_counts.values()
+        for counts in model_counts.values()
+    )
+    total_high_severity = sum(
+        counts["high_severity"]
+        for model_counts in model_technique_counts.values()
+        for counts in model_counts.values()
+    )
+    total_medium_severity = sum(
+        counts["medium_severity"]
+        for model_counts in model_technique_counts.values()
+        for counts in model_counts.values()
+    )
+    total_low_severity = sum(
+        counts["low_severity"]
         for model_counts in model_technique_counts.values()
         for counts in model_counts.values()
     )
@@ -621,6 +667,9 @@ def generate_comprehensive_table(results, syntax_error_stats, output_csv=None):
         str(total_refactor),
         str(total_warning),
         str(total_security),
+        str(total_high_severity),
+        str(total_medium_severity),
+        str(total_low_severity),
         str(total_instances),
         str(total_smelly),
         f"{overall_avg:.2f}",
@@ -705,6 +754,23 @@ def perform_kruskal_wallis_test(results, output_csv=None):
     if output_csv:
         header = ["Model", "Dataset", "H-statistic", "p-value", "Significant"]
         write_csv(header, rows, output_csv)
+
+    # Create a single comprehensive heatmap showing all types of smells
+    plt.figure(figsize=(20, 15))
+    total_pivot = df.pivot_table(
+        values="total_smells",
+        index=["model", "dataset"],
+        columns="technique",
+        aggfunc="mean",
+    )
+    sns.heatmap(total_pivot, annot=True, cmap="YlOrRd", fmt=".2f")
+    plt.title("Mean Total Smells by Model, Dataset, and Technique")
+    plt.tight_layout()
+    plt.savefig(
+        os.path.join(os.path.dirname(output_csv), "comprehensive_smells_heatmap.png")
+    )
+    plt.close()
+
     return test_results
 
 
@@ -1042,7 +1108,7 @@ def main():
                     dataset, technique = key.split("/")
                     total_files = sum(1 for _ in result["pylint"].values())
                     total_pylint = sum(
-                        len(issues["fatal_errors"]) + len(issues["other_issues"])
+                        len(issues["other_issues"])
                         for issues in result["pylint"].values()
                     )
                     total_bandit = (
@@ -1074,61 +1140,24 @@ def main():
 
             # Run each analysis and save to file
             for analysis_name, analysis_func in analyses.items():
-                output = get_function_output(analysis_func, model_results)
-                with open(
-                    os.path.join(model_dir, f"{analysis_name}.txt"),
-                    "w",
-                    encoding="utf-8",
-                ) as f:
-                    f.write(output)
-                # Write CSV
                 csv_path = os.path.join(model_dir, f"{analysis_name}.csv")
                 analysis_func(model_results, output_csv=csv_path)
 
         # Generate comprehensive analysis across all models
-        comprehensive_output = get_function_output(
-            generate_comprehensive_table, results, syntax_error_stats
-        )
-        with open(
-            os.path.join(analysis_dir, "comprehensive.txt"),
-            "w",
-            encoding="utf-8",
-        ) as f:
-            f.write(comprehensive_output)
         generate_comprehensive_table(
             results,
             syntax_error_stats,
             output_csv=os.path.join(analysis_dir, "comprehensive.csv"),
         )
         # Perform Kruskal-Wallis test for code smells
-        kruskal_output = get_function_output(perform_kruskal_wallis_test, results)
-        with open(
-            os.path.join(analysis_dir, "kruskal_wallis.txt"),
-            "w",
-            encoding="utf-8",
-        ) as f:
-            f.write(kruskal_output)
         perform_kruskal_wallis_test(
             results, output_csv=os.path.join(analysis_dir, "kruskal_wallis.csv")
         )
 
-        global_top_smells = get_function_output(analyze_global_top_smells, results)
-        with open(
-            os.path.join(analysis_dir, "global_top_smells.txt"), "w", encoding="utf-8"
-        ) as f:
-            f.write(global_top_smells)
         analyze_global_top_smells(
             results, output_csv=os.path.join(analysis_dir, "global_top_smells.csv")
         )
-        global_smells_by_type = get_function_output(
-            analyze_global_top_smells_by_type, results
-        )
-        with open(
-            os.path.join(analysis_dir, "global_smells_by_type.txt"),
-            "w",
-            encoding="utf-8",
-        ) as f:
-            f.write(global_smells_by_type)
+
         analyze_global_top_smells_by_type(
             results, output_csv=os.path.join(analysis_dir, "global_smells_by_type.csv")
         )
