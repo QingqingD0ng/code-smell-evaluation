@@ -36,7 +36,8 @@ logger.addHandler(file_handler)
 logger.addHandler(stream_handler)
 
 # Define prompting techniques from PROMPT_TEMPLATES
-TECHNIQUES = list(PROMPT_TEMPLATES.keys()) + ["canonical"]
+# TECHNIQUES = list(PROMPT_TEMPLATES.keys())
+TECHNIQUES = ["canonical"]
 
 
 def analyze_with_pylint(file_path):
@@ -923,8 +924,8 @@ def analyze_global_top_smells_by_type(results, output_csv=None):
 
 def main():
     # Base directories
-    extracted_code_dir = "extracted_code"
-    analysis_output_dir = "analysis_results"
+    extracted_code_dir = "passing_files_for_analysis"
+    analysis_output_dir = "analysis_results/passing_files"
     os.makedirs(analysis_output_dir, exist_ok=True)
 
     # Create timestamp for this analysis run
@@ -1175,5 +1176,178 @@ def main():
             f.write(f"Failed to generate analysis: {str(e)}")
 
 
+def analyze_saved_results(json_file_path, output_dir=None):
+    """
+    Analyze saved results from a JSON file and regenerate all analysis tables.
+
+    Args:
+        json_file_path (str): Path to the saved results JSON file
+        output_dir (str): Output directory for analysis results (optional)
+    """
+    # Create output directory
+    if output_dir is None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir = os.path.join("analysis_results", f"reanalysis_{timestamp}")
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Load saved results
+    try:
+        with open(json_file_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        results = data.get("results", {})
+        syntax_error_stats = data.get("syntax_error_stats", {})
+        logger.info(f"Successfully loaded results from {json_file_path}")
+        logger.info(f"Found {len(results)} models in saved results")
+    except Exception as e:
+        logger.error(f"Failed to load results from {json_file_path}: {str(e)}")
+        return
+
+    if not results:
+        logger.error("No results found to analyze")
+        return
+
+    # Print syntax error statistics
+    logger.info("\n=== Syntax Error Analysis ===")
+    logger.info(
+        "Model\tDataset\tTechnique\tTotal Samples\tSamples with Syntax Errors\tSyntax Correct Samples\tCorrectness %"
+    )
+    logger.info("-" * 100)
+    syntax_error_csv = os.path.join(output_dir, "syntax_error_stats.csv")
+    with open(syntax_error_csv, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(
+            [
+                "Model",
+                "Dataset",
+                "Technique",
+                "Total Samples",
+                "Samples with Syntax Errors",
+                "Syntax Correct Samples",
+                "Correctness %",
+            ]
+        )
+        for model_name in syntax_error_stats:
+            for dataset in syntax_error_stats[model_name]:
+                for technique in syntax_error_stats[model_name][dataset]:
+                    stats = syntax_error_stats[model_name][dataset][technique]
+                    logger.info(
+                        f"{model_name}\t{dataset}\t{technique}\t{stats['total_samples']}\t{stats['samples_with_syntax_errors']}\t{stats['syntax_correct_samples']}\t{stats['correctness_percentage']:.2f}%"
+                    )
+                    writer.writerow(
+                        [
+                            model_name,
+                            dataset,
+                            technique,
+                            stats["total_samples"],
+                            stats["samples_with_syntax_errors"],
+                            stats["syntax_correct_samples"],
+                            f"{stats['correctness_percentage']:.2f}%",
+                        ]
+                    )
+
+    # Generate summary report
+    summary_csv = os.path.join(output_dir, "summary.csv")
+    try:
+        with open(summary_csv, "w", newline="", encoding="UTF8") as f:
+            writer = csv.writer(f)
+            writer.writerow(
+                [
+                    "Model",
+                    "Dataset",
+                    "Technique",
+                    "Total Files (Syntax Correct)",
+                    "Total Pylint Issues",
+                    "Total Bandit Issues",
+                ]
+            )
+
+            for model_name, model_results in results.items():
+                for key, result in model_results.items():
+                    dataset, technique = key.split("/")
+                    total_files = sum(1 for _ in result["pylint"].values())
+                    total_pylint = sum(
+                        len(issues["other_issues"])
+                        for issues in result["pylint"].values()
+                    )
+                    total_bandit = (
+                        len(result["bandit"].get("results", []))
+                        if result["bandit"]
+                        else 0
+                    )
+
+                    writer.writerow(
+                        [
+                            model_name,
+                            dataset,
+                            technique,
+                            total_files,
+                            total_pylint,
+                            total_bandit,
+                        ]
+                    )
+
+        # Generate analysis for each model
+        for model_name, model_results in results.items():
+            model_dir = os.path.join(output_dir, model_name)
+            os.makedirs(model_dir, exist_ok=True)
+
+            # Define analysis functions
+            analyses = {
+                "top_smells": analyze_top_smells,
+                "smells_by_type": analyze_top_smells_by_type,
+            }
+
+            # Run each analysis and save to file
+            for analysis_name, analysis_func in analyses.items():
+                csv_path = os.path.join(model_dir, f"{analysis_name}.csv")
+                analysis_func(model_results, output_csv=csv_path)
+
+        # Generate comprehensive analysis across all models
+        generate_comprehensive_table(
+            results,
+            syntax_error_stats,
+            output_csv=os.path.join(output_dir, "comprehensive.csv"),
+        )
+
+        # Perform Kruskal-Wallis test for code smells
+        perform_kruskal_wallis_test(
+            results, output_csv=os.path.join(output_dir, "kruskal_wallis.csv")
+        )
+
+        analyze_global_top_smells(
+            results, output_csv=os.path.join(output_dir, "global_top_smells.csv")
+        )
+
+        analyze_global_top_smells_by_type(
+            results, output_csv=os.path.join(output_dir, "global_smells_by_type.csv")
+        )
+
+        logger.info(f"\nAnalysis complete! Results saved to {output_dir}/")
+
+    except Exception as e:
+        logger.error(f"Failed to generate analysis: {str(e)}")
+        with open(os.path.join(output_dir, "error.txt"), "w", encoding="utf-8") as f:
+            f.write(f"Failed to generate analysis: {str(e)}")
+
+
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Analyze code smells from extracted code or saved results"
+    )
+    parser.add_argument(
+        "--saved-results", "-s", help="Path to saved results JSON file to reanalyze"
+    )
+    parser.add_argument(
+        "--output-dir", "-o", help="Output directory for analysis results"
+    )
+
+    args = parser.parse_args()
+
+    if args.saved_results:
+        # Analyze saved results
+        analyze_saved_results(args.saved_results, args.output_dir)
+    else:
+        # Run original analysis
+        main()

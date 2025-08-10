@@ -14,7 +14,7 @@ from datasets import load_dataset
 def extract_bigcodebench_code():
 
     # Define paths
-    output_dir = "extracted_code/canonical/bigcodebench-hard/canonical"
+    output_dir = "canonical/canonical/bigcodebench-hard/canonical"
 
     # Create output directory if it doesn't exist
     Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -31,6 +31,7 @@ def extract_bigcodebench_code():
         try:
             # Extract taskid and canonical_solution
             taskid = item.get("task_id")
+            complete_prompt = item.get("complete_prompt")
             canonical_solution = item.get("canonical_solution")
 
             if taskid and canonical_solution:
@@ -40,6 +41,7 @@ def extract_bigcodebench_code():
 
                 # Write canonical_solution to file
                 with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(complete_prompt)
                     f.write(canonical_solution)
 
                 extracted_count += 1
@@ -57,7 +59,7 @@ def extract_bigcodebench_code():
 def extract_codereval_code():
     # Define paths
     json_file_path = "dataset/CoderEval4Python.json"
-    output_dir = "extracted_code/canonical/coderEval/canonical"
+    output_dir = "canonical/canonical/coderEval/canonical"
 
     # Create output directory if it doesn't exist
     Path(output_dir).mkdir(parents=True, exist_ok=True)
