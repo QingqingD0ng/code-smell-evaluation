@@ -23,96 +23,76 @@ logger.addHandler(file_handler)
 logger.addHandler(stream_handler)
 
 
-def extract_python_code(text):
-    """Extract Python code from text that may contain markdown code blocks or start directly with code."""
-    if not isinstance(text, str):
-        return ""
+def parse_filename_info(filename):
+    """Parse model, technique, and dataset from filename.
 
-    # Try to find code between ```python and ``` markers (case insensitive)
-    pattern = r"```(?:python)?(.*?)(?:```|$)"
-    matches = re.findall(pattern, text, re.DOTALL | re.IGNORECASE)
+    Args:
+        filename (str): Filename like "phi-3-bigcodebench-baseline-merged-sanitized.jsonl"
 
-    # Only consider non-empty, non-blank matches
-    if matches:
-        # Filter out empty or blank matches
-        non_blank_matches = [m for m in matches if m and m.strip()]
-        if non_blank_matches:
-            # Take the longest match if multiple are found
-            return max(non_blank_matches, key=len).strip()
+    Returns:
+        tuple: (model_name, dataset, technique)
+    """
+    # Remove the suffix
+    base_name = filename.replace("-merged-sanitized.jsonl", "")
+    parts = base_name.split("-")
 
-    # If no ```python blocks found, try just ``` blocks
-    pattern = r"```\\n([\s\S]*?)"
-    matches = re.findall(pattern, text, re.DOTALL)
+    # Define possible dataset names
+    possible_datasets = ["bigcodebench", "codereval"]
 
-    if matches:
-        # Filter out empty or blank matches
-        non_blank_matches = [m for m in matches if m and m.strip()]
-        if non_blank_matches:
-            # Take the longest match if multiple are found
-            code = max(non_blank_matches, key=len).strip()
-            # Verify it looks like Python code
-            if any(
-                line.strip().startswith(
-                    ("def ", "class ", "import ", "from ", "#", "if ", "for ", "while ")
-                )
-                for line in code.split("\n")
-            ):
-                return code
+    # Find which part contains the dataset name
+    dataset = None
+    dataset_index = None
 
-    # If no code blocks found, try to extract any Python-like code
-    lines = text.split("\n")
-    code_lines = []
-    in_code = False
-    python_indicators = (
-        "def ",
-        "self.",
-        "class ",
-        "import ",
-        "from ",
-        "#",
-        "if ",
-        "for ",
-        "while ",
-        "return",
-        "print(",
-        "with ",
-        "try:",
-        "except:",
-        "finally:",
-        "@",
-    )
-
-    # Find the first line that looks like Python code
-    first_code_idx = None
-    for idx, line in enumerate(lines):
-        stripped = line.strip()
-        if any(stripped.startswith(indicator) for indicator in python_indicators) or (
-            "=" in stripped and not stripped.startswith("=")
-        ):
-            first_code_idx = idx
+    for i, part in enumerate(parts):
+        if part in possible_datasets:
+            dataset = part
+            dataset_index = i
             break
 
-    if first_code_idx is not None:
-        # Extract from the first code-like line to the end
-        code_lines = lines[first_code_idx:]
-        # Clean up trailing empty lines
-        while code_lines and not code_lines[-1].strip():
-            code_lines.pop()
-        # Remove the last line if it is exactly '```'
-        if code_lines and code_lines[-1].strip() == "```":
-            code_lines.pop()
-        return "\n".join(code_lines).strip()
+    if dataset is None:
+        # No dataset found, assume codereval
+        dataset = "codereval"
+        dataset_index = 1  # Assume dataset is the second part
 
-    return None
+    # Determine model name and technique based on dataset position
+    if dataset_index == 1:  # dataset is second part
+        if parts[0] == "phi" and parts[1] in ["3", "4"]:
+            # phi-3-dataset-technique format
+            model_name = f"{parts[0]}-{parts[1]}"
+            technique = (
+                parts[dataset_index + 1]
+                if len(parts) > dataset_index + 1
+                else "unknown"
+            )
+        else:
+            # model-dataset-technique format
+            model_name = parts[0]
+            technique = (
+                parts[dataset_index + 1]
+                if len(parts) > dataset_index + 1
+                else "unknown"
+            )
+    elif dataset_index == 2:  # dataset is third part (phi-3-dataset-technique)
+        model_name = f"{parts[0]}-{parts[1]}"
+        technique = (
+            parts[dataset_index + 1] if len(parts) > dataset_index + 1 else "unknown"
+        )
+    else:
+        # Fallback
+        model_name = parts[0] if len(parts) > 0 else "unknown"
+        technique = parts[-1] if len(parts) > 1 else "unknown"
+
+    return model_name, dataset, technique
 
 
-def save_code_to_file(code, model_path, dataset, technique, task_id):
+def save_code_to_file(code, output_base_path, model_name, dataset, technique, task_id):
     """Save extracted code to a Python file.
 
     Args:
         code (str): The code to save
-        model_path (str): Base path for the model
-        dataset (str): Name of the dataset (e.g., 'bigcodebench' or 'codereval')
+        output_base_path (str): Base path for output
+        model_name (str): Name of the model
+        dataset (str): Name of the dataset
         technique (str): Name of the technique used
         task_id (str): ID of the task
     """
@@ -124,7 +104,7 @@ def save_code_to_file(code, model_path, dataset, technique, task_id):
     task_id = task_id.replace("\\", "_")
 
     filename = f"{task_id}.py"
-    file_path = os.path.join(model_path, dataset, technique, filename)
+    file_path = os.path.join(output_base_path, model_name, dataset, technique, filename)
 
     # Create directory if it doesn't exist
     try:
@@ -148,130 +128,260 @@ def save_code_to_file(code, model_path, dataset, technique, task_id):
 def process_jsonl(jsonl_path, output_base_path):
     """Process the JSONL file and extract code into organized folders."""
 
-    stats = defaultdict(lambda: defaultdict(lambda: {"success": 0, "failed": 0}))
+    # Parse filename to get model, dataset, and technique
+    filename = os.path.basename(jsonl_path)
+    model_name, dataset, technique = parse_filename_info(filename)
+
+    logger.info(
+        f"Processing {filename} -> Model: {model_name}, Dataset: {dataset}, Technique: {technique}"
+    )
+
+    stats = {"success": 0, "failed": 0}
     failed_extractions = []
 
     with open(jsonl_path, "r", encoding="utf-8") as f:
-        for line in f:
-            row = json.loads(line)
-            task_id = row["task_id"].split("/")[-1]
-            dataset = row["dataset"].split("/")[-1]
-            logger.info(f"Processing task {task_id} from {dataset}")
+        for line_num, line in enumerate(f, 1):
+            try:
+                row = json.loads(line)
+                task_id = row["task_id"].split("/")[-1]
 
-            # Process each model's generations
-            for model_name, model_generations in row["generations"].items():
-                model_name = model_name.split("/")[-1]
-                logger.info(f"Processing generations for model {model_name}")
-                model_path = os.path.join(output_base_path, model_name)
+                # Extract code from solution field
+                solution = row.get("solution", "")
+                if not solution:
+                    logger.warning(f"Line {line_num}: No solution field found")
+                    continue
 
-                # Process each generation type
-                for gen_type, content in model_generations.items():
-                    if gen_type == "error":
-                        error_msg = (
-                            f"Error in task {task_id} for model {model_name}: {content}"
-                        )
-                        logger.error(error_msg)
+                code = solution
+                if code:
+                    if save_code_to_file(
+                        code, output_base_path, model_name, dataset, technique, task_id
+                    ):
+                        stats["success"] += 1
+                    else:
+                        stats["failed"] += 1
                         failed_extractions.append(
                             {
+                                "line": line_num,
                                 "task_id": task_id,
-                                "model": model_name,
-                                "technique": gen_type,
-                                "reason": "Generation error",
-                                "details": content,
+                                "reason": "Failed to save code",
                             }
                         )
-                        continue
+                else:
+                    stats["failed"] += 1
+                    failed_extractions.append(
+                        {
+                            "line": line_num,
+                            "task_id": task_id,
+                            "reason": "No code extracted from solution",
+                        }
+                    )
 
-                    if gen_type == "cot":
-                        # Handle CoT special case
-                        code = extract_python_code(content["final_code"])
-                        if save_code_to_file(code, model_path, dataset, "cot", task_id):
-                            stats[model_name]["cot"]["success"] += 1
-                        else:
-                            stats[model_name]["cot"]["failed"] += 1
-                            failed_extractions.append(
-                                {
-                                    "task_id": task_id,
-                                    "model": model_name,
-                                    "technique": "cot",
-                                    "reason": "Failed to save CoT code",
-                                    "details": f"Code length: {len(code)} chars",
-                                }
-                            )
-                    elif gen_type == "rci":
-                        # Handle RCI special case
-                        code = extract_python_code(content.get("improved_code", ""))
-                        # If no code found in improved_code, try to extract from review
-                        if not code:
-                            code = extract_python_code(content.get("review", ""))
-                        if save_code_to_file(code, model_path, dataset, "rci", task_id):
-                            stats[model_name]["rci"]["success"] += 1
-                        else:
-                            stats[model_name]["rci"]["failed"] += 1
-                            failed_extractions.append(
-                                {
-                                    "task_id": task_id,
-                                    "model": model_name,
-                                    "technique": "rci",
-                                    "reason": "Failed to save RCI code",
-                                    "details": f"Code length: {len(code)} chars",
-                                }
-                            )
-                    else:
-                        # Handle regular generation types
-                        code = extract_python_code(content)
-                        if save_code_to_file(
-                            code, model_path, dataset, gen_type, task_id
-                        ):
-                            stats[model_name][gen_type]["success"] += 1
-                        else:
-                            stats[model_name][gen_type]["failed"] += 1
-                            failed_extractions.append(
-                                {
-                                    "task_id": task_id,
-                                    "model": model_name,
-                                    "technique": gen_type,
-                                    "reason": "Failed to save code",
-                                    "details": f"Code length: {len(code)} chars",
-                                }
-                            )
+            except json.JSONDecodeError as e:
+                logger.error(f"Line {line_num}: JSON decode error: {e}")
+                stats["failed"] += 1
+                failed_extractions.append(
+                    {
+                        "line": line_num,
+                        "task_id": "unknown",
+                        "reason": f"JSON decode error: {e}",
+                    }
+                )
+            except Exception as e:
+                logger.error(f"Line {line_num}: Unexpected error: {e}")
+                stats["failed"] += 1
+                failed_extractions.append(
+                    {
+                        "line": line_num,
+                        "task_id": "unknown",
+                        "reason": f"Unexpected error: {e}",
+                    }
+                )
 
     # Print statistics
-    logger.info("\nExtraction Statistics:")
-    for model_name, model_stats in stats.items():
-        logger.info(f"\n{model_name}:")
-        for technique, counts in model_stats.items():
-            logger.info(f"  {technique}:")
-            logger.info(f"    Successful extractions: {counts['success']}")
-            logger.info(f"    Failed extractions: {counts['failed']}")
-
-    # Print detailed failure report
-    if failed_extractions:
-        logger.error(f"\n=== FAILED EXTRACTIONS REPORT ===")
-        logger.error(f"Total failed extractions: {len(failed_extractions)}")
-
-        # Group failures by reason
-        failures_by_reason = defaultdict(list)
-        for failure in failed_extractions:
-            failures_by_reason[failure["reason"]].append(failure)
-
-        for reason, failures in failures_by_reason.items():
-            logger.error(f"\n{reason} ({len(failures)} failures):")
-            for failure in failures:
-                logger.error(
-                    f"  - Task {failure['task_id']} | Model: {failure['model']} | Technique: {failure['technique']}"
-                )
-                if failure.get("details"):
-                    logger.error(f"    Details: {failure['details']}")
-    else:
-        logger.info("\n=== ALL EXTRACTIONS SUCCESSFUL ===")
+    logger.info(f"\nExtraction Statistics for {filename}:")
+    logger.info(f"  Successful extractions: {stats['success']}")
+    logger.info(f"  Failed extractions: {stats['failed']}")
 
     return failed_extractions
 
 
+def extract_passing_solutions(eval_results_path, output_base_path):
+    """Extract passing solutions from evaluation results and save them to organized folders.
+
+    Args:
+        eval_results_path (str): Path to the evaluation results JSON file
+        output_base_path (str): Base path for output
+
+    Returns:
+        dict: Statistics about the extraction
+    """
+    # Parse filename to get model, dataset, and technique
+    filename = os.path.basename(eval_results_path)
+    model_name, dataset, technique = parse_filename_info(filename)
+
+    logger.info(
+        f"Processing evaluation results {filename} -> Model: {model_name}, Dataset: {dataset}, Technique: {technique}"
+    )
+
+    stats = {
+        "total_tasks": 0,
+        "passing_tasks": 0,
+        "timeout_tasks": 0,
+        "fail_tasks": 0,
+        "saved": 0,
+        "failed": 0,
+    }
+
+    try:
+        with open(eval_results_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        # Navigate to the eval section
+        if "eval" not in data:
+            logger.error(f"No 'eval' section found in {filename}")
+            return stats
+
+        eval_data = data["eval"]
+        stats["total_tasks"] = len(eval_data)
+
+        for task_id, task_results in eval_data.items():
+            if not isinstance(task_results, list) or len(task_results) == 0:
+                continue
+
+            # Get the first (and usually only) result for the task
+            task_result = task_results[0]
+
+            # Count different statuses
+            status = task_result.get("status", "unknown")
+            if status == "pass":
+                stats["passing_tasks"] += 1
+
+                # Extract the solution
+                solution = task_result.get("solution", "")
+                if not solution:
+                    logger.warning(
+                        f"Task {task_id}: No Python code extracted from solution"
+                    )
+                    stats["failed"] += 1
+                    continue
+
+                # Extract Python code from the solution
+                code = solution
+                if not code:
+                    logger.warning(
+                        f"Task {task_id}: No Python code extracted from solution"
+                    )
+                    stats["failed"] += 1
+                    continue
+
+                # Clean up the task_id (remove dataset prefix if present)
+                clean_task_id = task_id.split("/")[-1] if "/" in task_id else task_id
+
+                # Save the passing solution
+                if save_code_to_file(
+                    code,
+                    output_base_path,
+                    model_name,
+                    dataset,
+                    technique,
+                    clean_task_id,
+                ):
+                    stats["saved"] += 1
+                    logger.info(f"Saved passing solution for task {clean_task_id}")
+                else:
+                    stats["failed"] += 1
+                    logger.error(f"Failed to save solution for task {clean_task_id}")
+            elif status == "timeout":
+                stats["timeout_tasks"] += 1
+            elif status == "fail":
+                stats["fail_tasks"] += 1
+            # Note: We don't count "unknown" statuses separately, they're just not counted
+
+        logger.info(f"\nExtraction Statistics for {filename}:")
+        logger.info(f"  Total tasks: {stats['total_tasks']}")
+        logger.info(f"  Passing tasks: {stats['passing_tasks']}")
+        logger.info(f"  Timeout tasks: {stats['timeout_tasks']}")
+        logger.info(f"  Failed tasks: {stats['fail_tasks']}")
+        logger.info(f"  Successfully saved: {stats['saved']}")
+        logger.info(f"  Failed to save: {stats['failed']}")
+
+        # Calculate percentages
+        if stats["total_tasks"] > 0:
+            pass_rate = (stats["passing_tasks"] / stats["total_tasks"]) * 100
+            timeout_rate = (stats["timeout_tasks"] / stats["total_tasks"]) * 100
+            fail_rate = (stats["fail_tasks"] / stats["total_tasks"]) * 100
+            logger.info(f"  Pass rate: {pass_rate:.1f}%")
+            logger.info(f"  Timeout rate: {timeout_rate:.1f}%")
+            logger.info(f"  Fail rate: {fail_rate:.1f}%")
+
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON decode error in {filename}: {e}")
+    except Exception as e:
+        logger.error(f"Unexpected error processing {filename}: {e}")
+
+    return stats
+
+
+def process_evaluation_results(eval_results_dir, output_base_path):
+    """Process all evaluation results files and extract passing solutions.
+
+    Args:
+        eval_results_dir (str): Directory containing evaluation results
+        output_base_path (str): Base path for output
+    """
+    if not os.path.exists(eval_results_dir):
+        logger.error(f"Evaluation results directory not found: {eval_results_dir}")
+        return
+
+    logger.info(f"Processing evaluation results from: {eval_results_dir}")
+
+    all_stats = []
+    processed_files = 0
+
+    # Process each JSON file in the evaluation results directory
+    for fname in sorted(os.listdir(eval_results_dir)):
+        if fname.endswith("_eval_results.json"):
+            fpath = os.path.join(eval_results_dir, fname)
+            logger.info(f"Processing evaluation results: {fname}")
+
+            stats = extract_passing_solutions(fpath, output_base_path)
+            all_stats.append(stats)
+            processed_files += 1
+
+    # Print summary statistics
+    if all_stats:
+        total_tasks = sum(stats["total_tasks"] for stats in all_stats)
+        total_passing = sum(stats["passing_tasks"] for stats in all_stats)
+        total_timeout = sum(stats["timeout_tasks"] for stats in all_stats)
+        total_fail = sum(stats["fail_tasks"] for stats in all_stats)
+        total_saved = sum(stats["saved"] for stats in all_stats)
+        total_failed = sum(stats["failed"] for stats in all_stats)
+
+        logger.info(f"\n=== EVALUATION RESULTS EXTRACTION SUMMARY ===")
+        logger.info(f"Processed {processed_files} evaluation result files")
+        logger.info(f"Total tasks across all files: {total_tasks}")
+        logger.info(f"Total passing tasks: {total_passing}")
+        logger.info(f"Total timeout tasks: {total_timeout}")
+        logger.info(f"Total failed tasks: {total_fail}")
+        logger.info(f"Successfully saved: {total_saved}")
+        logger.info(f"Failed to save: {total_failed}")
+
+        # Calculate overall rates
+        if total_tasks > 0:
+            pass_rate = (total_passing / total_tasks) * 100
+            timeout_rate = (total_timeout / total_tasks) * 100
+            fail_rate = (total_fail / total_tasks) * 100
+            logger.info(f"Overall pass rate: {pass_rate:.1f}%")
+            logger.info(f"Overall timeout rate: {timeout_rate:.1f}%")
+            logger.info(f"Overall fail rate: {fail_rate:.1f}%")
+        else:
+            logger.info("Overall rates: N/A (no tasks found)")
+
+
 def main():
-    # Add argument parser
-    parser = argparse.ArgumentParser(description="Extract code from JSONL file(s)")
+    parser = argparse.ArgumentParser(
+        description="Extract code from sanitized JSONL files or evaluation results"
+    )
     parser.add_argument(
         "--input",
         help="Input JSONL file containing the generated code",
@@ -282,16 +392,30 @@ def main():
     )
     parser.add_argument(
         "--output",
-        default="extracted_code",
+        default="extracted_code_passed",
         help="Output directory for extracted code (default: extracted_code)",
+    )
+    parser.add_argument(
+        "--eval_results",
+        action="store_true",
+        help="Process evaluation results instead of sanitized results",
+    )
+    parser.add_argument(
+        "--eval_results_dir",
+        default="evaluation_results",
+        help="Directory containing evaluation results (default: evaluation_results)",
     )
     args = parser.parse_args()
 
-    # Configure paths
     output_base_path = args.output
-
     all_failed_extractions = []
     processed_files = set()
+
+    # Process evaluation results if requested
+    if args.eval_results:
+        logger.info("Processing evaluation results to extract passing solutions...")
+        process_evaluation_results(args.eval_results_dir, output_base_path)
+        return
 
     # Process single input file if provided
     if args.input:
@@ -307,15 +431,53 @@ def main():
             if fname.endswith(".jsonl"):
                 fpath = os.path.abspath(os.path.join(args.input_dir, fname))
                 if fpath in processed_files:
-                    continue  # Avoid double-processing
+                    continue
                 logger.info(f"Processing {fpath}...")
                 failed_extractions = process_jsonl(fpath, output_base_path)
                 all_failed_extractions.extend(failed_extractions)
                 processed_files.add(fpath)
 
+    # Auto-process sanitized results if no other input is specified
     if not args.input and not args.input_dir:
-        logger.error("You must provide either --input or --input_dir.")
-        return
+        sanitized_dir = "extracted_results_sanitized"
+        if os.path.exists(sanitized_dir):
+            logger.info(
+                f"Automatically processing sanitized results from: {sanitized_dir}"
+            )
+
+            # Process each dataset directory
+            for dataset_name in os.listdir(sanitized_dir):
+                dataset_path = os.path.join(sanitized_dir, dataset_name)
+                if os.path.isdir(dataset_path):
+                    logger.info(f"Processing dataset: {dataset_name}")
+
+                    # Process each JSONL file in the dataset directory
+                    for fname in sorted(os.listdir(dataset_path)):
+                        if fname.endswith(".jsonl"):
+                            fpath = os.path.abspath(os.path.join(dataset_path, fname))
+                            if fpath in processed_files:
+                                continue
+
+                            logger.info(f"Processing {fpath}...")
+                            failed_extractions = process_jsonl(fpath, output_base_path)
+                            all_failed_extractions.extend(failed_extractions)
+                            processed_files.add(fpath)
+                else:
+                    # Handle case where dataset_name is a file (e.g., codereval files in root)
+                    if dataset_name.endswith(".jsonl"):
+                        fpath = os.path.abspath(
+                            os.path.join(sanitized_dir, dataset_name)
+                        )
+                        if fpath in processed_files:
+                            continue
+
+                        logger.info(f"Processing {fpath}...")
+                        failed_extractions = process_jsonl(fpath, output_base_path)
+                        all_failed_extractions.extend(failed_extractions)
+                        processed_files.add(fpath)
+        else:
+            logger.error(f"Sanitized directory not found: {sanitized_dir}")
+            return
 
     # Save failed extractions to a JSON file for further analysis
     if all_failed_extractions:
