@@ -1,0 +1,11 @@
+def string_to_int(string, alphabet):
+
+    base = len(alphabet)
+
+    result = 0
+
+    for char in string:
+
+        result = result * base + alphabet.index(char)
+
+    return result

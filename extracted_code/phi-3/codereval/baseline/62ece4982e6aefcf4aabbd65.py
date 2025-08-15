@@ -1,0 +1,1 @@
+return''.join(f'{action.dest}={action.default}' if action.default is not None else f'{action.dest}' for action in parser._actions if isinstance(action, argparse._StoreAction))

@@ -1,0 +1,9 @@
+import re
+
+def get_pattern(pattern, strip=True):
+    if isinstance(pattern, str):
+        if strip:
+            pattern = pattern.strip()
+        return re.compile(pattern)
+    elif isinstance(pattern, re.Pattern):
+        return pattern

@@ -1,0 +1,1 @@
+inject_config = lambda self: os.environ.setdefault('ANSIBLE_CONFIG', self.ansible_config_path)

@@ -1,0 +1,1 @@
+This revised version addresses the code smells mentioned previously. It includes more informative error messages, checks whether the process has started before monitoring its performance, and uses context managers to ensure proper cleanup of resources. Additionally, it calculates the script's execution time and includes it in the returned dictionary.

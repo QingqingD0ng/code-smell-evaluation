@@ -1,5 +1,5 @@
 """
-Batch extract and merge results from generated code files.
+Batch extract and merge results from generated jsonl files.
 Automatically processes all files in results directory, groups by technique and model,
 and merges them into single files.
 """
@@ -39,6 +39,165 @@ MODEL_MAPPING = {
 }
 
 
+def extract_python_code(text: str) -> str:
+    """Simple extraction method.
+
+    This method looks for Python code patterns and stops when it finds clear explanatory text.
+    """
+
+    lines = text.split("\n")
+
+    # Find the first line that contains Python code
+    start_index = -1
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped and any(
+            stripped.startswith(indicator)
+            for indicator in [
+                "def ",
+                "class ",
+                "import ",
+                "from ",
+                "if ",
+                "for ",
+                "while ",
+                "try:",
+                "else:",
+                "elif ",
+                "except:",
+                "with ",
+                "finally:",
+                "return",
+                "yield",
+                "raise",
+                "assert",
+                "pass",
+                "break",
+                "continue",
+            ]
+        ):
+            start_index = i
+            break
+
+    if start_index == -1:
+        return text
+
+    # Find the end of code by looking for clear explanatory text markers
+    end_index = start_index
+
+    for i in range(start_index, len(lines)):
+        line = lines[i]
+        stripped = line.strip()
+
+        if not stripped:
+            continue
+
+        # Keep going if this line looks like code
+        if any(
+            keyword in stripped
+            for keyword in [
+                "def ",
+                "class ",
+                "import ",
+                "from ",
+                "if ",
+                "for ",
+                "while ",
+                "try:",
+                "except:",
+                "with ",
+                "return",
+                "yield",
+                "raise",
+                "assert",
+                "pass",
+                "break",
+                "continue",
+                "elif ",
+                "else:",
+                "finally:",
+                "=",
+                "(",
+                ")",
+                "[",
+                "]",
+                "{",
+                "}",
+                ":",
+                "#",
+            ]
+        ):
+            end_index = i
+            continue
+
+        # Keep going if this line is indented (part of a code block)
+        if line.startswith(" ") or line.startswith("\t"):
+            end_index = i
+            continue
+
+        # Keep going if this line has code-like characters
+        if any(char in stripped for char in "{}[]()"):
+            end_index = i
+            continue
+
+        # Stop if we find clear explanatory text
+        if any(
+            pattern in stripped.lower()
+            for pattern in [
+                "this code will output",
+                "example usage",
+                "output:",
+                "returns:",
+                "raises:",
+                "note:",
+                "warning:",
+                "caution:",
+                "version:",
+                "added:",
+                "changed:",
+                "```",
+                "the output will be",
+                "this will produce",
+                "running this code",
+                "when you run this",
+                "if you execute this",
+                "this function will",
+                "this method will",
+                "this class will",
+                "this will return",
+                "this will print",
+                "this will output",
+                "this will display",
+                "this will show",
+                "this will generate",
+                "this will create",
+            ]
+        ):
+            break
+
+        # If we reach here, assume it's still part of the code
+        end_index = i
+
+    # Extract the code lines
+    if start_index >= 0 and end_index >= start_index:
+        code_lines = lines[start_index : end_index + 1]
+
+        # Clean up trailing empty lines
+        while code_lines and not code_lines[-1].strip():
+            code_lines.pop()
+
+        if code_lines:
+            result = "\n".join(code_lines).strip()
+            logger.debug(
+                f"Simple fallback extraction found {len(code_lines)} lines of code"
+            )
+            return result
+
+    # If extraction failed, return original text
+    logger.debug("Simple fallback extraction failed, returning original text")
+    return text
+
+
 def parse_filename(filename: str) -> Optional[Tuple[str, str, str, Optional[str]]]:
     """
     Parse filename to extract model, dataset, technique, and task range.
@@ -59,30 +218,27 @@ def parse_filename(filename: str) -> Optional[Tuple[str, str, str, Optional[str]
         return None
 
     # Find the model name by checking if it appears in the filename
-    model = None
+    model: Optional[str] = None
     for model_name in MODELS:
         if model_name in base_name:
             model = model_name
             break
+
+    # If we cannot infer the model, bail out (satisfies typing and avoids Nones)
+    if model is None:
+        return None
+
     # For dataset and technique, we know the structure is model-dataset-technique
     # Find the position after the model name and extract from there
-    if model in base_name:
-        # Split and find where the model ends
-        model_parts = model.split("-")
-        if len(parts) >= len(model_parts) + 2:
-            dataset = parts[len(model_parts)]
-            technique = parts[len(model_parts) + 1]
-        else:
-            return None
+    model_parts = model.split("-")
+    if len(parts) >= len(model_parts) + 2:
+        dataset = parts[len(model_parts)]
+        technique = parts[len(model_parts) + 1]
     else:
-        # Fallback to simple parsing
-        if len(parts) < 3:
-            return None
-        dataset = parts[1]
-        technique = parts[2]
+        return None
 
     # Check if there's a task range in the remaining parts
-    task_range = None
+    task_range: Optional[str] = None
     expected_parts = len(model.split("-")) + 2  # model parts + dataset + technique
     if len(parts) > expected_parts:
         # Join remaining parts and check if it looks like a task range
@@ -191,6 +347,7 @@ def process_single_file(
                     solution = extract_solution_from_result(
                         result, dataset, technique, model
                     )
+                    solution = extract_python_code(solution)
 
                     if solution:
                         extracted_results.append(

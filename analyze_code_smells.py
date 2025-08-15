@@ -12,7 +12,6 @@ from generate_code import (
 )
 import argparse
 import pandas as pd
-import numpy as np
 from scipy import stats
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -36,8 +35,7 @@ logger.addHandler(file_handler)
 logger.addHandler(stream_handler)
 
 # Define prompting techniques from PROMPT_TEMPLATES
-# TECHNIQUES = list(PROMPT_TEMPLATES.keys())
-TECHNIQUES = ["canonical"]
+TECHNIQUES = list(PROMPT_TEMPLATES.keys())
 
 
 def analyze_with_pylint(file_path):
@@ -924,7 +922,7 @@ def analyze_global_top_smells_by_type(results, output_csv=None):
 
 def main():
     # Base directories
-    extracted_code_dir = "passing_files_for_analysis"
+    extracted_code_dir = "extracted_code"
     analysis_output_dir = "analysis_results/passing_files"
     os.makedirs(analysis_output_dir, exist_ok=True)
 

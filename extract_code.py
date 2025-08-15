@@ -1,9 +1,7 @@
 import os
 import json
-import re
 import argparse
 import logging
-from collections import defaultdict
 
 # Set up logging for code extraction
 logger = logging.getLogger("code_extraction")
@@ -34,6 +32,7 @@ def parse_filename_info(filename):
     """
     # Remove the suffix
     base_name = filename.replace("-merged-sanitized.jsonl", "")
+    base_name = filename.replace("-merged.jsonl", "")
     parts = base_name.split("-")
 
     # Define possible dataset names
@@ -151,8 +150,10 @@ def process_jsonl(jsonl_path, output_base_path):
                     logger.warning(f"Line {line_num}: No solution field found")
                     continue
 
+                # Extract Python code from the solution, removing any text
                 code = solution
                 if code:
+
                     if save_code_to_file(
                         code, output_base_path, model_name, dataset, technique, task_id
                     ):
@@ -172,7 +173,7 @@ def process_jsonl(jsonl_path, output_base_path):
                         {
                             "line": line_num,
                             "task_id": task_id,
-                            "reason": "No code extracted from solution",
+                            "reason": "No Python code extracted from solution",
                         }
                     )
 
@@ -259,13 +260,11 @@ def extract_passing_solutions(eval_results_path, output_base_path):
                 # Extract the solution
                 solution = task_result.get("solution", "")
                 if not solution:
-                    logger.warning(
-                        f"Task {task_id}: No Python code extracted from solution"
-                    )
+                    logger.warning(f"Task {task_id}: No solution field found")
                     stats["failed"] += 1
                     continue
 
-                # Extract Python code from the solution
+                # Extract Python code from the solution, removing any text
                 code = solution
                 if not code:
                     logger.warning(
@@ -380,7 +379,7 @@ def process_evaluation_results(eval_results_dir, output_base_path):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Extract code from sanitized JSONL files or evaluation results"
+        description="Extract Python code from JSONL files or evaluation results, removing text and keeping only code"
     )
     parser.add_argument(
         "--input",
@@ -392,7 +391,7 @@ def main():
     )
     parser.add_argument(
         "--output",
-        default="extracted_code_passed",
+        default="extracted_code",
         help="Output directory for extracted code (default: extracted_code)",
     )
     parser.add_argument(
@@ -439,15 +438,13 @@ def main():
 
     # Auto-process sanitized results if no other input is specified
     if not args.input and not args.input_dir:
-        sanitized_dir = "extracted_results_sanitized"
-        if os.path.exists(sanitized_dir):
-            logger.info(
-                f"Automatically processing sanitized results from: {sanitized_dir}"
-            )
+        code_dir = "extracted_results"
+        if os.path.exists(code_dir):
+            logger.info(f"Automatically processing sanitized results from: {code_dir}")
 
             # Process each dataset directory
-            for dataset_name in os.listdir(sanitized_dir):
-                dataset_path = os.path.join(sanitized_dir, dataset_name)
+            for dataset_name in os.listdir(code_dir):
+                dataset_path = os.path.join(code_dir, dataset_name)
                 if os.path.isdir(dataset_path):
                     logger.info(f"Processing dataset: {dataset_name}")
 
@@ -465,9 +462,7 @@ def main():
                 else:
                     # Handle case where dataset_name is a file (e.g., codereval files in root)
                     if dataset_name.endswith(".jsonl"):
-                        fpath = os.path.abspath(
-                            os.path.join(sanitized_dir, dataset_name)
-                        )
+                        fpath = os.path.abspath(os.path.join(code_dir, dataset_name))
                         if fpath in processed_files:
                             continue
 
@@ -476,7 +471,7 @@ def main():
                         all_failed_extractions.extend(failed_extractions)
                         processed_files.add(fpath)
         else:
-            logger.error(f"Sanitized directory not found: {sanitized_dir}")
+            logger.error(f"Sanitized directory not found: {code_dir}")
             return
 
     # Save failed extractions to a JSON file for further analysis
@@ -491,7 +486,7 @@ def main():
         except Exception as e:
             logger.error(f"Failed to save failed extractions report: {str(e)}")
 
-    logger.info("\nDone! Code has been extracted and organized into folders.")
+    logger.info("\nDone! Python code has been extracted and organized into folders.")
     logger.info(f"Output location: {os.path.abspath(output_base_path)}")
     if all_failed_extractions:
         logger.warning(

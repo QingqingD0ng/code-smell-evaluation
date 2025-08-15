@@ -12,20 +12,37 @@ echo "Starting BigCodeBench evaluation for array ID: $ARRAY_ID"
 
 # Define the BigCodeBench sanitized files
 declare -a bigcodebench_files=(
-    "extracted_results_sanitized/bigcodebench/phi-3-bigcodebench-cot-merged-sanitized.jsonl"
-    "extracted_results_sanitized/bigcodebench/phi-3-bigcodebench-persona-merged-sanitized.jsonl"
-    "extracted_results_sanitized/bigcodebench/phi-3-bigcodebench-quality_focused-merged-sanitized.jsonl"
-    "extracted_results_sanitized/bigcodebench/phi-3-bigcodebench-rci-merged-sanitized.jsonl"
-    "extracted_results_sanitized/bigcodebench/phi-4-bigcodebench-baseline-merged-sanitized.jsonl"
-    "extracted_results_sanitized/bigcodebench/phi-4-bigcodebench-cot-merged-sanitized.jsonl"
-    "extracted_results_sanitized/bigcodebench/phi-4-bigcodebench-persona-merged-sanitized.jsonl"
-    "extracted_results_sanitized/bigcodebench/phi-4-bigcodebench-quality_focused-merged-sanitized.jsonl"
-    "extracted_results_sanitized/bigcodebench/phi-4-bigcodebench-rci-merged-sanitized.jsonl"
-    "extracted_results_sanitized/bigcodebench/qwen-bigcodebench-baseline-merged-sanitized.jsonl"
-    "extracted_results_sanitized/bigcodebench/qwen-bigcodebench-cot-merged-sanitized.jsonl"
-    "extracted_results_sanitized/bigcodebench/qwen-bigcodebench-persona-merged-sanitized.jsonl"
-    "extracted_results_sanitized/bigcodebench/qwen-bigcodebench-quality_focused-merged-sanitized.jsonl"
-    "extracted_results_sanitized/bigcodebench/qwen-bigcodebench-rci-merged-sanitized.jsonl"
+    "extracted_results_sanitized/phi-3-bigcodebench-baseline-merged.jsonl"
+    "extracted_results_sanitized/phi-3-bigcodebench-cot-merged.jsonl"
+    "extracted_results_sanitized/phi-3-bigcodebench-persona-merged.jsonl"
+    "extracted_results_sanitized/phi-3-bigcodebench-quality_focused-merged.jsonl"
+    "extracted_results_sanitized/phi-3-bigcodebench-rci-merged.jsonl"
+    "extracted_results_sanitized/phi-4-bigcodebench-baseline-merged.jsonl"
+    "extracted_results_sanitized/phi-4-bigcodebench-cot-merged.jsonl"
+    "extracted_results_sanitized/phi-4-bigcodebench-persona-merged.jsonl"
+    "extracted_results_sanitized/phi-4-bigcodebench-quality_focused-merged.jsonl"
+    "extracted_results_sanitized/phi-4-bigcodebench-rci-merged.jsonl"
+    "extracted_results_sanitized/qwen-bigcodebench-baseline-merged.jsonl"
+    "extracted_results_sanitized/qwen-bigcodebench-cot-merged.jsonl"
+    "extracted_results_sanitized/qwen-bigcodebench-persona-merged.jsonl"
+    "extracted_results_sanitized/qwen-bigcodebench-quality_focused-merged.jsonl"
+    "extracted_results_sanitized/qwen-bigcodebench-rci-merged.jsonl"
+    "extracted_results/phi-3-bigcodebench-baseline-merged.jsonl"
+    "extracted_results/phi-3-bigcodebench-cot-merged.jsonl"
+    "extracted_results/phi-3-bigcodebench-persona-merged.jsonl"
+    "extracted_results/phi-3-bigcodebench-quality_focused-merged.jsonl"
+    "extracted_results/phi-3-bigcodebench-rci-merged.jsonl"
+    "extracted_results/phi-4-bigcodebench-baseline-merged.jsonl"
+    "extracted_results/phi-4-bigcodebench-cot-merged.jsonl"
+    "extracted_results/phi-4-bigcodebench-persona-merged.jsonl"
+    "extracted_results/phi-4-bigcodebench-quality_focused-merged.jsonl"
+    "extracted_results/phi-4-bigcodebench-rci-merged.jsonl"
+    "extracted_results/qwen-bigcodebench-baseline-merged.jsonl"
+    "extracted_results/qwen-bigcodebench-cot-merged.jsonl"
+    "extracted_results/qwen-bigcodebench-persona-merged.jsonl"
+    "extracted_results/qwen-bigcodebench-quality_focused-merged.jsonl"
+    "extracted_results/qwen-bigcodebench-rci-merged.jsonl"
+    
 )
 
 # Get the current file based on array index
@@ -33,7 +50,7 @@ current_file="${bigcodebench_files[$ARRAY_ID]}"
 
 # Extract model and strategy from filename for output naming
 filename=$(basename "$current_file" .jsonl)
-model_strategy=$(echo "$filename" | sed 's/-merged-sanitized//')
+model_strategy=$(echo "$filename" | sed 's/-merged//')
 
 echo "Processing file: $current_file"
 echo "Model/Strategy: $model_strategy"

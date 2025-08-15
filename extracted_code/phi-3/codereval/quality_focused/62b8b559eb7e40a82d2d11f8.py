@@ -1,0 +1,1 @@
+minimalBases = [cls for cls in classes if not any(issubclass(subcls, cls) for subcls in classes if subcls is not cls)]

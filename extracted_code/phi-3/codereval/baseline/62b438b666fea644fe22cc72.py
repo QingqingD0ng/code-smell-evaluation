@@ -1,0 +1,1 @@
+return''.join(f.dest for f in parser._actions if not isinstance(f, _ArgumentGroup))

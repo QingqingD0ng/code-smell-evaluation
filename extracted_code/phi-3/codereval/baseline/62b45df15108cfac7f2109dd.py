@@ -1,0 +1,1 @@
+return f"{prefix}{self.log.status_str()}"

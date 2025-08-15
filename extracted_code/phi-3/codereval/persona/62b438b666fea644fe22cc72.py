@@ -1,0 +1,1 @@
+parser_flags =''.join(action.dest for action in parser._actions if hasattr(action, 'dest'))
