@@ -1,1 +1,0 @@
-integral = sum(edges[i+1] - edges[i] for i in range(len(edges)-1)) * (bins[1] - bins[0])

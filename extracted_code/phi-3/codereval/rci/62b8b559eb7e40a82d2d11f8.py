@@ -1,1 +1,0 @@
-minimalBases = [cls for cls in classes if cls.__bases__ and not any(hasattr(base, '__subclasses__') and base.__subclasses__() for base in cls.__bases__)]

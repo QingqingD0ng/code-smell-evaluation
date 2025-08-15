@@ -1,2 +1,0 @@
-class TargetClass:
-    pass

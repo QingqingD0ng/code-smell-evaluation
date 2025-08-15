@@ -1,1 +1,0 @@
-This refactored version includes descriptive variable names, separates functionality into smaller, reusable functions, and enhances error messages. The comments and docstrings have been removed as per the initial instructions.

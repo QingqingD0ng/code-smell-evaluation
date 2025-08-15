@@ -1,1 +1,0 @@
-return''.join(f'--{action.dest}' for action in parser._actions if action.dest is not None)

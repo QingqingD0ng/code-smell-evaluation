@@ -1,2 +1,0 @@
-def create_complex_argumet_type(self, subcommand, type_name, option_name, spec_option):
-    return COMPLEX_TYPES.get(type_name, lambda x: None)(self.vars, self.defaults, self.plugin_path, subcommand, spec_option)
