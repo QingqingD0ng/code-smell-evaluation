@@ -12,37 +12,7 @@ echo "Starting BigCodeBench evaluation for array ID: $ARRAY_ID"
 
 # Define the BigCodeBench sanitized files
 declare -a bigcodebench_files=(
-    "extracted_results_sanitized/phi-3-bigcodebench-baseline-merged.jsonl"
-    "extracted_results_sanitized/phi-3-bigcodebench-cot-merged.jsonl"
-    "extracted_results_sanitized/phi-3-bigcodebench-persona-merged.jsonl"
-    "extracted_results_sanitized/phi-3-bigcodebench-quality_focused-merged.jsonl"
-    "extracted_results_sanitized/phi-3-bigcodebench-rci-merged.jsonl"
-    "extracted_results_sanitized/phi-4-bigcodebench-baseline-merged.jsonl"
-    "extracted_results_sanitized/phi-4-bigcodebench-cot-merged.jsonl"
-    "extracted_results_sanitized/phi-4-bigcodebench-persona-merged.jsonl"
-    "extracted_results_sanitized/phi-4-bigcodebench-quality_focused-merged.jsonl"
-    "extracted_results_sanitized/phi-4-bigcodebench-rci-merged.jsonl"
-    "extracted_results_sanitized/qwen-bigcodebench-baseline-merged.jsonl"
-    "extracted_results_sanitized/qwen-bigcodebench-cot-merged.jsonl"
-    "extracted_results_sanitized/qwen-bigcodebench-persona-merged.jsonl"
-    "extracted_results_sanitized/qwen-bigcodebench-quality_focused-merged.jsonl"
-    "extracted_results_sanitized/qwen-bigcodebench-rci-merged.jsonl"
-    "extracted_results/phi-3-bigcodebench-baseline-merged.jsonl"
-    "extracted_results/phi-3-bigcodebench-cot-merged.jsonl"
-    "extracted_results/phi-3-bigcodebench-persona-merged.jsonl"
-    "extracted_results/phi-3-bigcodebench-quality_focused-merged.jsonl"
-    "extracted_results/phi-3-bigcodebench-rci-merged.jsonl"
-    "extracted_results/phi-4-bigcodebench-baseline-merged.jsonl"
-    "extracted_results/phi-4-bigcodebench-cot-merged.jsonl"
-    "extracted_results/phi-4-bigcodebench-persona-merged.jsonl"
-    "extracted_results/phi-4-bigcodebench-quality_focused-merged.jsonl"
-    "extracted_results/phi-4-bigcodebench-rci-merged.jsonl"
-    "extracted_results/qwen-bigcodebench-baseline-merged.jsonl"
-    "extracted_results/qwen-bigcodebench-cot-merged.jsonl"
-    "extracted_results/qwen-bigcodebench-persona-merged.jsonl"
-    "extracted_results/qwen-bigcodebench-quality_focused-merged.jsonl"
     "extracted_results/qwen-bigcodebench-rci-merged.jsonl"
-    
 )
 
 # Get the current file based on array index

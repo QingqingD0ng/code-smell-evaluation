@@ -8,7 +8,7 @@
 
 
 # Build the command with parameters
-CMD="python analyze_code_smells.py"
+CMD="python analyze_code_smells.py --extracted-code-dir /scratch/qido00001/code-smell-evaluation/extracted_code --analysis-output-dir /scratch/qido00001/code-smell-evaluation/analysis_results/original"
 
 # Run the command
 srun /scratch/qido00001/code-smell-evaluation/analyze.sh "$CMD"
